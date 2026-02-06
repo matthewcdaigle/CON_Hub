@@ -16,6 +16,42 @@ export async function registerRoutes(
   await setupAuth(app);
   registerAuthRoutes(app);
 
+  app.post("/api/demo-login", async (req: any, res) => {
+    try {
+      const { authStorage } = await import("./replit_integrations/auth");
+      const demoUser = await authStorage.upsertUser({
+        id: "demo-user",
+        email: "demo@gaconcounsel.com",
+        firstName: "Demo",
+        lastName: "Attorney",
+        profileImageUrl: null,
+      });
+
+      const demoExpiry = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60;
+      req.login(
+        {
+          claims: {
+            sub: demoUser.id,
+            email: demoUser.email,
+            first_name: demoUser.firstName,
+            last_name: demoUser.lastName,
+          },
+          expires_at: demoExpiry,
+        },
+        (err: any) => {
+          if (err) {
+            console.error("Demo login error:", err);
+            return res.status(500).json({ message: "Failed to log in" });
+          }
+          res.json({ success: true });
+        }
+      );
+    } catch (error) {
+      console.error("Demo login error:", error);
+      res.status(500).json({ message: "Failed to log in" });
+    }
+  });
+
   app.get("/api/dockets", async (_req, res) => {
     try {
       const dockets = await storage.getDockets();

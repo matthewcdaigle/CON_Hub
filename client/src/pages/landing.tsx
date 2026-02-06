@@ -1,9 +1,29 @@
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { Scale, FileSearch, FileText, Bell, BookOpen, Shield } from "lucide-react";
+import { Scale, FileSearch, FileText, Bell, BookOpen, Shield, Loader2 } from "lucide-react";
+import { queryClient } from "@/lib/queryClient";
 
 export default function Landing() {
+  const [demoLoading, setDemoLoading] = useState(false);
+
+  const handleDemoLogin = async () => {
+    setDemoLoading(true);
+    try {
+      const res = await fetch("/api/demo-login", {
+        method: "POST",
+        credentials: "include",
+      });
+      if (res.ok) {
+        await queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+        window.location.href = "/";
+      }
+    } catch {
+    } finally {
+      setDemoLoading(false);
+    }
+  };
   return (
     <div className="min-h-screen bg-background">
       <nav className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur-md">
@@ -46,6 +66,18 @@ export default function Landing() {
                     Get Started
                   </Button>
                 </a>
+                <Button
+                  size="lg"
+                  variant="secondary"
+                  onClick={handleDemoLogin}
+                  disabled={demoLoading}
+                  data-testid="button-demo-login"
+                >
+                  {demoLoading ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : null}
+                  Try Demo
+                </Button>
                 <a href="#features">
                   <Button size="lg" variant="outline" data-testid="button-learn-more">
                     Learn More
