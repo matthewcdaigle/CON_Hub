@@ -20,7 +20,7 @@ export async function seedDatabase() {
       filingDate: new Date("2025-01-15"),
       description: "Application for establishment of a new cardiac catheterization laboratory with two procedure rooms at the existing Piedmont Augusta Medical Center campus.",
       estimatedCost: "$12,500,000",
-      laserficheUrl: "https://lfrep.dch.georgia.gov",
+      laserficheUrl: "https://weblink.dch.georgia.gov/WebLink/Browse.aspx?startid=63&dbid=1&cr=1",
     },
     {
       caseNumber: "CON-2025-002",
@@ -34,7 +34,7 @@ export async function seedDatabase() {
       hearingDate: new Date("2025-04-15"),
       description: "Application for a new 120-bed skilled nursing facility in the Buckhead area of Atlanta to serve the growing elderly population in North Fulton County.",
       estimatedCost: "$28,000,000",
-      laserficheUrl: "https://lfrep.dch.georgia.gov",
+      laserficheUrl: "https://weblink.dch.georgia.gov/WebLink/Browse.aspx?startid=63&dbid=1&cr=1",
     },
     {
       caseNumber: "CON-2024-047",
@@ -49,7 +49,7 @@ export async function seedDatabase() {
       decisionDate: new Date("2025-01-20"),
       description: "Application for the addition of one MRI unit at Emory Johns Creek Hospital to address growing diagnostic imaging demand in the northeast Atlanta metropolitan area.",
       estimatedCost: "$3,200,000",
-      laserficheUrl: "https://lfrep.dch.georgia.gov",
+      laserficheUrl: "https://weblink.dch.georgia.gov/WebLink/Browse.aspx?startid=63&dbid=1&cr=1",
     },
     {
       caseNumber: "CON-2025-003",
@@ -62,7 +62,7 @@ export async function seedDatabase() {
       filingDate: new Date("2025-02-01"),
       description: "Application for establishment of a new multi-specialty ambulatory surgery center with four operating rooms adjacent to the existing WellStar Cobb Hospital.",
       estimatedCost: "$18,500,000",
-      laserficheUrl: "https://lfrep.dch.georgia.gov",
+      laserficheUrl: "https://weblink.dch.georgia.gov/WebLink/Browse.aspx?startid=63&dbid=1&cr=1",
     },
     {
       caseNumber: "CON-2024-052",
@@ -76,7 +76,7 @@ export async function seedDatabase() {
       hearingDate: new Date("2025-01-28"),
       description: "Application to add 30 adult psychiatric beds at the Navicent Medical Center campus in Macon to address critical behavioral health capacity shortages in Central Georgia.",
       estimatedCost: "$8,750,000",
-      laserficheUrl: "https://lfrep.dch.georgia.gov",
+      laserficheUrl: "https://weblink.dch.georgia.gov/WebLink/Browse.aspx?startid=63&dbid=1&cr=1",
     },
   ]).returning();
 
@@ -104,21 +104,21 @@ export async function seedDatabase() {
       description: "The complete text of Georgia's Certificate of Need statute governing healthcare facility construction, expansion, and new services.",
       tags: ["statute", "CON law", "Georgia", "O.C.G.A."],
       sourceUrl: "https://law.justia.com/codes/georgia/title-31/chapter-6/",
-      laserficheUrl: "https://lfrep.dch.georgia.gov",
+      laserficheUrl: "https://weblink.dch.georgia.gov/WebLink/Browse.aspx?startid=63&dbid=1&cr=1",
     },
     {
       title: "DCH Rules Chapter 111-2-2: Certificate of Need",
       category: "Regulation",
       description: "Administrative rules implementing the Georgia Certificate of Need program, including application procedures, review criteria, and hearing processes.",
       tags: ["regulation", "DCH", "rules", "administrative"],
-      laserficheUrl: "https://lfrep.dch.georgia.gov",
+      laserficheUrl: "https://weblink.dch.georgia.gov/WebLink/Browse.aspx?startid=63&dbid=1&cr=1",
     },
     {
       title: "2024 Georgia State Health Plan - CON Component",
       category: "Guidance",
       description: "The annual State Health Plan establishes need projections for healthcare services and facilities subject to CON review in Georgia.",
       tags: ["state health plan", "need methodology", "projections", "2024"],
-      laserficheUrl: "https://lfrep.dch.georgia.gov",
+      laserficheUrl: "https://weblink.dch.georgia.gov/WebLink/Browse.aspx?startid=63&dbid=1&cr=1",
     },
     {
       title: "Piedmont Healthcare v. DCH - CON Appeal Decision",
@@ -126,14 +126,14 @@ export async function seedDatabase() {
       description: "Superior Court decision on appeal of DCH's denial of a CON application for cardiac surgery services. Establishes precedent on need methodology review.",
       tags: ["appeal", "court decision", "cardiac surgery", "Piedmont"],
       relatedDocketId: d1.id,
-      laserficheUrl: "https://lfrep.dch.georgia.gov",
+      laserficheUrl: "https://weblink.dch.georgia.gov/WebLink/Browse.aspx?startid=63&dbid=1&cr=1",
     },
     {
       title: "DCH Advisory Opinion: Replacement Equipment Exemption",
       category: "Advisory Opinion",
       description: "DCH advisory opinion clarifying when medical equipment replacement qualifies for the CON exemption under O.C.G.A. § 31-6-47.",
       tags: ["advisory opinion", "exemption", "equipment", "replacement"],
-      laserficheUrl: "https://lfrep.dch.georgia.gov",
+      laserficheUrl: "https://weblink.dch.georgia.gov/WebLink/Browse.aspx?startid=63&dbid=1&cr=1",
     },
     {
       title: "Skilled Nursing Facility Need Methodology Analysis",
@@ -141,21 +141,21 @@ export async function seedDatabase() {
       description: "Staff analysis of the bed need methodology for skilled nursing facilities in Georgia, including population projections and utilization trends.",
       tags: ["SNF", "need methodology", "bed projections", "utilization"],
       relatedDocketId: d2.id,
-      laserficheUrl: "https://lfrep.dch.georgia.gov",
+      laserficheUrl: "https://weblink.dch.georgia.gov/WebLink/Browse.aspx?startid=63&dbid=1&cr=1",
     },
     {
       title: "Recent CON Decisions Summary - Q4 2024",
       category: "Guidance",
       description: "Summary of all CON decisions issued by DCH during the fourth quarter of 2024, including approvals, denials, and conditions imposed.",
       tags: ["decisions", "summary", "Q4 2024", "quarterly report"],
-      laserficheUrl: "https://lfrep.dch.georgia.gov",
+      laserficheUrl: "https://weblink.dch.georgia.gov/WebLink/Browse.aspx?startid=63&dbid=1&cr=1",
     },
     {
       title: "CON Application Checklist and Requirements",
       category: "Template",
       description: "Comprehensive checklist of all required components for a Georgia CON application, including financial projections, architectural plans, and community benefit documentation.",
       tags: ["checklist", "application", "requirements", "filing"],
-      laserficheUrl: "https://lfrep.dch.georgia.gov",
+      laserficheUrl: "https://weblink.dch.georgia.gov/WebLink/Browse.aspx?startid=63&dbid=1&cr=1",
     },
   ]);
 
