@@ -43,9 +43,11 @@ export default function Drafting() {
     queryKey: ["/api/templates"],
   });
 
-  const { data: dockets } = useQuery<Docket[]>({
+  const { data: docketsResponse } = useQuery<{ data: Docket[]; total: number }>({
     queryKey: ["/api/dockets"],
   });
+
+  const dockets = docketsResponse?.data;
 
   const { data: savedDrafts, isLoading: draftsLoading } = useQuery<SavedDraft[]>({
     queryKey: ["/api/drafts"],
@@ -132,9 +134,13 @@ export default function Drafting() {
   };
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(draftContent);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(draftContent);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast({ title: "Copy Failed", description: "Unable to copy to clipboard. Try selecting the text manually.", variant: "destructive" });
+    }
   };
 
   const loadSavedDraft = (draft: SavedDraft) => {

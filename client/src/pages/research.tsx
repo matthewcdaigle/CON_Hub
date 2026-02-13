@@ -33,9 +33,11 @@ export default function Research() {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
 
-  const { data: documents, isLoading } = useQuery<ResearchDocument[]>({
+  const { data: docsResponse, isLoading } = useQuery<{ data: ResearchDocument[]; total: number }>({
     queryKey: ["/api/research"],
   });
+
+  const documents = docsResponse?.data;
 
   const filtered = (documents || []).filter((doc) => {
     const matchesSearch =

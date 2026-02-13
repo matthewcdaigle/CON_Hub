@@ -17,6 +17,7 @@ import Research from "@/pages/research";
 import Drafting from "@/pages/drafting";
 import Alerts from "@/pages/alerts";
 import NotFound from "@/pages/not-found";
+import { ErrorBoundary } from "@/components/error-boundary";
 
 function AuthenticatedLayout() {
   const style = {
@@ -34,15 +35,17 @@ function AuthenticatedLayout() {
             <ThemeToggle />
           </header>
           <main className="flex-1 overflow-auto">
-            <Switch>
-              <Route path="/" component={Dashboard} />
-              <Route path="/dockets" component={Dockets} />
-              <Route path="/dockets/:id" component={DocketDetail} />
-              <Route path="/research" component={Research} />
-              <Route path="/drafting" component={Drafting} />
-              <Route path="/alerts" component={Alerts} />
-              <Route component={NotFound} />
-            </Switch>
+            <ErrorBoundary>
+              <Switch>
+                <Route path="/" component={Dashboard} />
+                <Route path="/dockets" component={Dockets} />
+                <Route path="/dockets/:id" component={DocketDetail} />
+                <Route path="/research" component={Research} />
+                <Route path="/drafting" component={Drafting} />
+                <Route path="/alerts" component={Alerts} />
+                <Route component={NotFound} />
+              </Switch>
+            </ErrorBoundary>
           </main>
         </div>
       </div>

@@ -2,11 +2,60 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
+import { z } from "zod";
+import {
+  insertDocketSubscriptionSchema,
+  insertSavedDraftSchema,
+} from "@shared/schema";
 import OpenAI from "openai";
 
-const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+// Lazy OpenAI initialization — fails at call time with a clear message
+// rather than silently creating a broken client at import time
+let _openai: OpenAI | null = null;
+function getOpenAI(): OpenAI {
+  if (!_openai) {
+    const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
+    if (!apiKey) {
+      throw new Error("AI_INTEGRATIONS_OPENAI_API_KEY is not configured. Set this environment variable to enable AI drafting.");
+    }
+    _openai = new OpenAI({
+      apiKey,
+      baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+    });
+  }
+  return _openai;
+}
+
+/** Parse and validate a numeric ID from route params. Returns null if invalid. */
+function parseId(raw: string): number | null {
+  const id = parseInt(raw, 10);
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+
+/** Parse pagination query params with sensible bounds. */
+function parsePagination(query: Record<string, any>): { limit: number; offset: number } {
+  const limit = Math.min(Math.max(parseInt(query.limit, 10) || 50, 1), 200);
+  const offset = Math.max(parseInt(query.offset, 10) || 0, 0);
+  return { limit, offset };
+}
+
+// Validation schemas for request bodies
+const createSubscriptionBody = z.object({
+  docketId: z.number().int().positive(),
+});
+
+const createDraftBody = z.object({
+  title: z.string().min(1).max(500),
+  content: z.string().min(1),
+  templateId: z.number().int().positive().nullable().optional(),
+  docketId: z.number().int().positive().nullable().optional(),
+});
+
+const generateDraftBody = z.object({
+  prompt: z.string().min(1).max(10000),
+  templateId: z.number().int().positive().nullable().optional(),
+  docketId: z.number().int().positive().nullable().optional(),
+  existingContent: z.string().max(50000).nullable().optional(),
 });
 
 export async function registerRoutes(
@@ -16,46 +65,52 @@ export async function registerRoutes(
   await setupAuth(app);
   registerAuthRoutes(app);
 
-  app.post("/api/demo-login", async (req: any, res) => {
-    try {
-      const { authStorage } = await import("./replit_integrations/auth");
-      const demoUser = await authStorage.upsertUser({
-        id: "demo-user",
-        email: "demo@gaconcounsel.com",
-        firstName: "Demo",
-        lastName: "Attorney",
-        profileImageUrl: null,
-      });
+  // Demo login — development only
+  if (process.env.NODE_ENV !== "production") {
+    app.post("/api/demo-login", async (req: any, res) => {
+      try {
+        const { authStorage } = await import("./replit_integrations/auth");
+        const demoUser = await authStorage.upsertUser({
+          id: "demo-user",
+          email: "demo@gaconcounsel.com",
+          firstName: "Demo",
+          lastName: "Attorney",
+          profileImageUrl: null,
+        });
 
-      const demoExpiry = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60;
-      req.login(
-        {
-          claims: {
-            sub: demoUser.id,
-            email: demoUser.email,
-            first_name: demoUser.firstName,
-            last_name: demoUser.lastName,
+        const demoExpiry = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60;
+        req.login(
+          {
+            claims: {
+              sub: demoUser.id,
+              email: demoUser.email,
+              first_name: demoUser.firstName,
+              last_name: demoUser.lastName,
+            },
+            expires_at: demoExpiry,
           },
-          expires_at: demoExpiry,
-        },
-        (err: any) => {
-          if (err) {
-            console.error("Demo login error:", err);
-            return res.status(500).json({ message: "Failed to log in" });
+          (err: any) => {
+            if (err) {
+              console.error("Demo login error:", err);
+              return res.status(500).json({ message: "Failed to log in" });
+            }
+            res.json({ success: true });
           }
-          res.json({ success: true });
-        }
-      );
-    } catch (error) {
-      console.error("Demo login error:", error);
-      res.status(500).json({ message: "Failed to log in" });
-    }
-  });
+        );
+      } catch (error) {
+        console.error("Demo login error:", error);
+        res.status(500).json({ message: "Failed to log in" });
+      }
+    });
+  }
 
-  app.get("/api/dockets", async (_req, res) => {
+  // ── Dockets ──────────────────────────────────────────────
+
+  app.get("/api/dockets", async (req, res) => {
     try {
-      const dockets = await storage.getDockets();
-      res.json(dockets);
+      const pagination = parsePagination(req.query);
+      const result = await storage.getDockets(pagination);
+      res.json(result);
     } catch (error) {
       console.error("Error fetching dockets:", error);
       res.status(500).json({ message: "Failed to fetch dockets" });
@@ -64,7 +119,8 @@ export async function registerRoutes(
 
   app.get("/api/dockets/:id", async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseId(req.params.id);
+      if (!id) return res.status(400).json({ message: "Invalid docket ID" });
       const docket = await storage.getDocket(id);
       if (!docket) return res.status(404).json({ message: "Docket not found" });
       res.json(docket);
@@ -76,7 +132,8 @@ export async function registerRoutes(
 
   app.get("/api/dockets/:id/events", async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseId(req.params.id);
+      if (!id) return res.status(400).json({ message: "Invalid docket ID" });
       const events = await storage.getDocketEvents(id);
       res.json(events);
     } catch (error) {
@@ -85,10 +142,13 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/research", async (_req, res) => {
+  // ── Research ─────────────────────────────────────────────
+
+  app.get("/api/research", async (req, res) => {
     try {
-      const docs = await storage.getResearchDocuments();
-      res.json(docs);
+      const pagination = parsePagination(req.query);
+      const result = await storage.getResearchDocuments(pagination);
+      res.json(result);
     } catch (error) {
       console.error("Error fetching research:", error);
       res.status(500).json({ message: "Failed to fetch research documents" });
@@ -97,7 +157,8 @@ export async function registerRoutes(
 
   app.get("/api/research/:id", async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseId(req.params.id);
+      if (!id) return res.status(400).json({ message: "Invalid document ID" });
       const doc = await storage.getResearchDocument(id);
       if (!doc) return res.status(404).json({ message: "Document not found" });
       res.json(doc);
@@ -106,6 +167,8 @@ export async function registerRoutes(
       res.status(500).json({ message: "Failed to fetch document" });
     }
   });
+
+  // ── Subscriptions ────────────────────────────────────────
 
   app.get("/api/subscriptions", isAuthenticated, async (req: any, res) => {
     try {
@@ -121,19 +184,29 @@ export async function registerRoutes(
   app.post("/api/subscriptions", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      const { docketId } = req.body;
-      const sub = await storage.createSubscription({ userId, docketId });
+      const parsed = createSubscriptionBody.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid request", errors: parsed.error.flatten().fieldErrors });
+      }
+      const sub = await storage.createSubscription({ userId, docketId: parsed.data.docketId });
       res.status(201).json(sub);
-    } catch (error) {
+    } catch (error: any) {
+      // Handle unique constraint violation (duplicate subscription)
+      if (error?.code === "23505") {
+        return res.status(409).json({ message: "Already subscribed to this docket" });
+      }
       console.error("Error creating subscription:", error);
       res.status(500).json({ message: "Failed to create subscription" });
     }
   });
 
-  app.delete("/api/subscriptions/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/subscriptions/:id", isAuthenticated, async (req: any, res) => {
     try {
-      const id = parseInt(req.params.id);
-      await storage.deleteSubscription(id);
+      const id = parseId(req.params.id);
+      if (!id) return res.status(400).json({ message: "Invalid subscription ID" });
+      const userId = req.user.claims.sub;
+      const deleted = await storage.deleteSubscription(id, userId);
+      if (!deleted) return res.status(404).json({ message: "Subscription not found" });
       res.status(204).send();
     } catch (error) {
       console.error("Error deleting subscription:", error);
@@ -141,21 +214,27 @@ export async function registerRoutes(
     }
   });
 
+  // ── Notifications ────────────────────────────────────────
+
   app.get("/api/notifications", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      const notifs = await storage.getNotifications(userId);
-      res.json(notifs);
+      const pagination = parsePagination(req.query);
+      const result = await storage.getNotifications(userId, pagination);
+      res.json(result);
     } catch (error) {
       console.error("Error fetching notifications:", error);
       res.status(500).json({ message: "Failed to fetch notifications" });
     }
   });
 
-  app.patch("/api/notifications/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/notifications/:id", isAuthenticated, async (req: any, res) => {
     try {
-      const id = parseInt(req.params.id);
-      await storage.markNotificationRead(id);
+      const id = parseId(req.params.id);
+      if (!id) return res.status(400).json({ message: "Invalid notification ID" });
+      const userId = req.user.claims.sub;
+      const updated = await storage.markNotificationRead(id, userId);
+      if (!updated) return res.status(404).json({ message: "Notification not found" });
       res.json({ success: true });
     } catch (error) {
       console.error("Error updating notification:", error);
@@ -173,6 +252,8 @@ export async function registerRoutes(
       res.status(500).json({ message: "Failed to mark notifications read" });
     }
   });
+
+  // ── Templates & Drafts ──────────────────────────────────
 
   app.get("/api/templates", async (_req, res) => {
     try {
@@ -198,13 +279,16 @@ export async function registerRoutes(
   app.post("/api/drafts", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      const { title, content, templateId, docketId } = req.body;
+      const parsed = createDraftBody.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid request", errors: parsed.error.flatten().fieldErrors });
+      }
       const draft = await storage.createSavedDraft({
         userId,
-        title,
-        content,
-        templateId: templateId || null,
-        docketId: docketId || null,
+        title: parsed.data.title,
+        content: parsed.data.content,
+        templateId: parsed.data.templateId ?? null,
+        docketId: parsed.data.docketId ?? null,
       });
       res.status(201).json(draft);
     } catch (error) {
@@ -213,11 +297,19 @@ export async function registerRoutes(
     }
   });
 
+  // ── AI Draft Generation (SSE with heartbeat) ────────────
+
   app.post("/api/drafts/generate", isAuthenticated, async (req: any, res) => {
     try {
-      const { prompt, templateId, docketId, existingContent } = req.body;
+      const parsed = generateDraftBody.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid request", errors: parsed.error.flatten().fieldErrors });
+      }
 
-      let context = `You are a legal drafting assistant specializing in Georgia Certificate of Need (CON) proceedings. You help attorneys draft filings, responses, briefs, letters of intent, and other legal documents related to Georgia's CON process administered by the Department of Community Health (DCH).
+      const { prompt, templateId, docketId, existingContent } = parsed.data;
+
+      // System message — contains only trusted, server-controlled content
+      const systemMessage = `You are a legal drafting assistant specializing in Georgia Certificate of Need (CON) proceedings. You help attorneys draft filings, responses, briefs, letters of intent, and other legal documents related to Georgia's CON process administered by the Department of Community Health (DCH).
 
 Key Georgia CON knowledge:
 - Georgia's CON program is administered by the Healthcare Facility Regulation Division of DCH
@@ -226,12 +318,9 @@ Key Georgia CON knowledge:
 - CON is required for new healthcare facilities, bed additions, new services, and major capital expenditures
 - The CON review criteria include need, accessibility, quality, cost containment, and financial feasibility
 
-Generate professional, well-structured legal content.`;
+Generate professional, well-structured legal content. This content will be reviewed by a licensed attorney before use.`;
 
-      if (existingContent) {
-        context += `\n\nExisting draft content to build upon or refine:\n${existingContent}`;
-      }
-
+      // Docket context — built from trusted database records
       let docketContext = "";
       if (docketId) {
         const docket = await storage.getDocket(docketId);
@@ -247,6 +336,7 @@ Generate professional, well-structured legal content.`;
         }
       }
 
+      // Template context — built from trusted database records
       let templateContext = "";
       if (templateId) {
         const template = await storage.getTemplate(templateId);
@@ -255,28 +345,46 @@ Generate professional, well-structured legal content.`;
         }
       }
 
+      // User-supplied content goes in the user message, not system message.
+      // This prevents prompt injection via existingContent from overriding system instructions.
+      let userMessage = prompt;
+      if (existingContent) {
+        userMessage = `Here is the existing draft content to build upon or refine:\n\n---\n${existingContent}\n---\n\nRequest: ${prompt}`;
+      }
+
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
 
-      const stream = await openai.chat.completions.create({
-        model: "gpt-5-mini",
-        messages: [
-          { role: "system", content: context + docketContext + templateContext },
-          { role: "user", content: prompt },
-        ],
-        stream: true,
-        max_completion_tokens: 4096,
-      });
+      // Heartbeat to keep connection alive through proxies/load balancers
+      const heartbeat = setInterval(() => {
+        res.write(": heartbeat\n\n");
+      }, 15000);
 
-      for await (const chunk of stream) {
-        const content = chunk.choices[0]?.delta?.content || "";
-        if (content) {
-          res.write(`data: ${JSON.stringify({ content })}\n\n`);
+      try {
+        const openai = getOpenAI();
+        const stream = await openai.chat.completions.create({
+          model: "gpt-5-mini",
+          messages: [
+            { role: "system", content: systemMessage + docketContext + templateContext },
+            { role: "user", content: userMessage },
+          ],
+          stream: true,
+          max_completion_tokens: 4096,
+        });
+
+        for await (const chunk of stream) {
+          const content = chunk.choices[0]?.delta?.content || "";
+          if (content) {
+            res.write(`data: ${JSON.stringify({ content })}\n\n`);
+          }
         }
+
+        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+      } finally {
+        clearInterval(heartbeat);
       }
 
-      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
       res.end();
     } catch (error) {
       console.error("Error generating draft:", error);

@@ -9,10 +9,24 @@ import {
   type SavedDraft, type InsertSavedDraft,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, and, ilike, or } from "drizzle-orm";
+import { eq, desc, and, ilike, or, sql, count } from "drizzle-orm";
+
+export interface PaginationParams {
+  limit: number;
+  offset: number;
+}
+
+export interface PaginatedResult<T> {
+  data: T[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+const DEFAULT_PAGE_LIMIT = 50;
 
 export interface IStorage {
-  getDockets(): Promise<Docket[]>;
+  getDockets(pagination?: PaginationParams): Promise<PaginatedResult<Docket>>;
   getDocket(id: number): Promise<Docket | undefined>;
   createDocket(docket: InsertDocket): Promise<Docket>;
   updateDocket(id: number, data: Partial<InsertDocket>): Promise<Docket | undefined>;
@@ -20,18 +34,18 @@ export interface IStorage {
   getDocketEvents(docketId: number): Promise<DocketEvent[]>;
   createDocketEvent(event: InsertDocketEvent): Promise<DocketEvent>;
 
-  getResearchDocuments(): Promise<ResearchDocument[]>;
+  getResearchDocuments(pagination?: PaginationParams): Promise<PaginatedResult<ResearchDocument>>;
   getResearchDocument(id: number): Promise<ResearchDocument | undefined>;
   createResearchDocument(doc: InsertResearchDocument): Promise<ResearchDocument>;
 
   getSubscriptions(userId: string): Promise<DocketSubscription[]>;
   createSubscription(sub: InsertDocketSubscription): Promise<DocketSubscription>;
-  deleteSubscription(id: number): Promise<void>;
+  deleteSubscription(id: number, userId: string): Promise<boolean>;
   getSubscriptionsByDocket(docketId: number): Promise<DocketSubscription[]>;
 
-  getNotifications(userId: string): Promise<Notification[]>;
+  getNotifications(userId: string, pagination?: PaginationParams): Promise<PaginatedResult<Notification>>;
   createNotification(notif: InsertNotification): Promise<Notification>;
-  markNotificationRead(id: number): Promise<void>;
+  markNotificationRead(id: number, userId: string): Promise<boolean>;
   markAllNotificationsRead(userId: string): Promise<void>;
 
   getTemplates(): Promise<DraftTemplate[]>;
@@ -43,8 +57,19 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
-  async getDockets(): Promise<Docket[]> {
-    return db.select().from(dockets).orderBy(desc(dockets.createdAt));
+  async getDockets(pagination?: PaginationParams): Promise<PaginatedResult<Docket>> {
+    const limit = pagination?.limit ?? DEFAULT_PAGE_LIMIT;
+    const offset = pagination?.offset ?? 0;
+
+    const [data, [{ total }]] = await Promise.all([
+      db.select().from(dockets)
+        .orderBy(desc(dockets.createdAt))
+        .limit(limit)
+        .offset(offset),
+      db.select({ total: count() }).from(dockets),
+    ]);
+
+    return { data, total, limit, offset };
   }
 
   async getDocket(id: number): Promise<Docket | undefined> {
@@ -58,7 +83,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateDocket(id: number, data: Partial<InsertDocket>): Promise<Docket | undefined> {
-    const [updated] = await db.update(dockets).set(data).where(eq(dockets.id, id)).returning();
+    const [updated] = await db.update(dockets)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(dockets.id, id))
+      .returning();
     return updated;
   }
 
@@ -73,8 +101,19 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
-  async getResearchDocuments(): Promise<ResearchDocument[]> {
-    return db.select().from(researchDocuments).orderBy(desc(researchDocuments.createdAt));
+  async getResearchDocuments(pagination?: PaginationParams): Promise<PaginatedResult<ResearchDocument>> {
+    const limit = pagination?.limit ?? DEFAULT_PAGE_LIMIT;
+    const offset = pagination?.offset ?? 0;
+
+    const [data, [{ total }]] = await Promise.all([
+      db.select().from(researchDocuments)
+        .orderBy(desc(researchDocuments.createdAt))
+        .limit(limit)
+        .offset(offset),
+      db.select({ total: count() }).from(researchDocuments),
+    ]);
+
+    return { data, total, limit, offset };
   }
 
   async getResearchDocument(id: number): Promise<ResearchDocument | undefined> {
@@ -98,8 +137,11 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
-  async deleteSubscription(id: number): Promise<void> {
-    await db.delete(docketSubscriptions).where(eq(docketSubscriptions.id, id));
+  async deleteSubscription(id: number, userId: string): Promise<boolean> {
+    const result = await db.delete(docketSubscriptions)
+      .where(and(eq(docketSubscriptions.id, id), eq(docketSubscriptions.userId, userId)))
+      .returning();
+    return result.length > 0;
   }
 
   async getSubscriptionsByDocket(docketId: number): Promise<DocketSubscription[]> {
@@ -107,10 +149,21 @@ export class DatabaseStorage implements IStorage {
       .where(eq(docketSubscriptions.docketId, docketId));
   }
 
-  async getNotifications(userId: string): Promise<Notification[]> {
-    return db.select().from(notifications)
-      .where(eq(notifications.userId, userId))
-      .orderBy(desc(notifications.createdAt));
+  async getNotifications(userId: string, pagination?: PaginationParams): Promise<PaginatedResult<Notification>> {
+    const limit = pagination?.limit ?? DEFAULT_PAGE_LIMIT;
+    const offset = pagination?.offset ?? 0;
+
+    const [data, [{ total }]] = await Promise.all([
+      db.select().from(notifications)
+        .where(eq(notifications.userId, userId))
+        .orderBy(desc(notifications.createdAt))
+        .limit(limit)
+        .offset(offset),
+      db.select({ total: count() }).from(notifications)
+        .where(eq(notifications.userId, userId)),
+    ]);
+
+    return { data, total, limit, offset };
   }
 
   async createNotification(notif: InsertNotification): Promise<Notification> {
@@ -118,8 +171,12 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
-  async markNotificationRead(id: number): Promise<void> {
-    await db.update(notifications).set({ read: true }).where(eq(notifications.id, id));
+  async markNotificationRead(id: number, userId: string): Promise<boolean> {
+    const result = await db.update(notifications)
+      .set({ read: true })
+      .where(and(eq(notifications.id, id), eq(notifications.userId, userId)))
+      .returning();
+    return result.length > 0;
   }
 
   async markAllNotificationsRead(userId: string): Promise<void> {
