@@ -17,19 +17,23 @@ export default function Alerts() {
   const { user } = useAuth();
   const { toast } = useToast();
 
-  const { data: notifications, isLoading: notifsLoading } = useQuery<Notification[]>({
+  const { data: notificationsResponse, isLoading: notifsLoading } = useQuery<{ data: Notification[]; total: number }>({
     queryKey: ["/api/notifications"],
     enabled: !!user,
   });
+
+  const notifications = notificationsResponse?.data;
 
   const { data: subscriptions, isLoading: subsLoading } = useQuery<DocketSubscription[]>({
     queryKey: ["/api/subscriptions"],
     enabled: !!user,
   });
 
-  const { data: dockets } = useQuery<Docket[]>({
+  const { data: docketsResponse } = useQuery<{ data: Docket[]; total: number }>({
     queryKey: ["/api/dockets"],
   });
+
+  const dockets = docketsResponse?.data;
 
   const markReadMutation = useMutation({
     mutationFn: async (id: number) => {

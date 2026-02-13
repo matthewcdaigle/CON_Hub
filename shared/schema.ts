@@ -1,5 +1,5 @@
 import { sql, relations } from "drizzle-orm";
-import { pgTable, text, varchar, serial, integer, timestamp, boolean, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, serial, integer, timestamp, boolean, pgEnum, uniqueIndex, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -35,7 +35,12 @@ export const dockets = pgTable("dockets", {
   estimatedCost: text("estimated_cost"),
   laserficheUrl: text("laserfiche_url"),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
-});
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+}, (table) => [
+  index("dockets_status_idx").on(table.status),
+  index("dockets_county_idx").on(table.county),
+  index("dockets_filing_date_idx").on(table.filingDate),
+]);
 
 export const docketEvents = pgTable("docket_events", {
   id: serial("id").primaryKey(),
@@ -45,7 +50,9 @@ export const docketEvents = pgTable("docket_events", {
   eventDate: timestamp("event_date").notNull(),
   eventType: text("event_type").notNull(),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
-});
+}, (table) => [
+  index("docket_events_docket_id_idx").on(table.docketId),
+]);
 
 export const researchDocuments = pgTable("research_documents", {
   id: serial("id").primaryKey(),
@@ -58,14 +65,19 @@ export const researchDocuments = pgTable("research_documents", {
   laserficheUrl: text("laserfiche_url"),
   relatedDocketId: integer("related_docket_id").references(() => dockets.id),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
-});
+}, (table) => [
+  index("research_documents_category_idx").on(table.category),
+]);
 
 export const docketSubscriptions = pgTable("docket_subscriptions", {
   id: serial("id").primaryKey(),
   userId: varchar("user_id").notNull(),
   docketId: integer("docket_id").notNull().references(() => dockets.id, { onDelete: "cascade" }),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
-});
+}, (table) => [
+  uniqueIndex("docket_subscriptions_user_docket_idx").on(table.userId, table.docketId),
+  index("docket_subscriptions_user_id_idx").on(table.userId),
+]);
 
 export const notifications = pgTable("notifications", {
   id: serial("id").primaryKey(),
@@ -75,7 +87,10 @@ export const notifications = pgTable("notifications", {
   message: text("message").notNull(),
   read: boolean("read").default(false).notNull(),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
-});
+}, (table) => [
+  index("notifications_user_id_idx").on(table.userId),
+  index("notifications_user_read_idx").on(table.userId, table.read),
+]);
 
 export const draftTemplates = pgTable("draft_templates", {
   id: serial("id").primaryKey(),
@@ -94,7 +109,10 @@ export const savedDrafts = pgTable("saved_drafts", {
   templateId: integer("template_id").references(() => draftTemplates.id),
   docketId: integer("docket_id").references(() => dockets.id),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
-});
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+}, (table) => [
+  index("saved_drafts_user_id_idx").on(table.userId),
+]);
 
 export const docketsRelations = relations(dockets, ({ many }) => ({
   events: many(docketEvents),
@@ -117,6 +135,7 @@ export const docketSubscriptionsRelations = relations(docketSubscriptions, ({ on
 export const insertDocketSchema = createInsertSchema(dockets).omit({
   id: true,
   createdAt: true,
+  updatedAt: true,
 });
 
 export const insertDocketEventSchema = createInsertSchema(docketEvents).omit({
@@ -147,6 +166,7 @@ export const insertDraftTemplateSchema = createInsertSchema(draftTemplates).omit
 export const insertSavedDraftSchema = createInsertSchema(savedDrafts).omit({
   id: true,
   createdAt: true,
+  updatedAt: true,
 });
 
 export type Docket = typeof dockets.$inferSelect;
