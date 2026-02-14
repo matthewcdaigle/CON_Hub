@@ -397,5 +397,189 @@ Generate professional, well-structured legal content. This content will be revie
     }
   });
 
+  // ── Case Briefs ──────────────────────────────────────────
+
+  app.get("/api/case-briefs", async (_req, res) => {
+    try {
+      const briefs = await storage.getCaseBriefs();
+      res.json(briefs);
+    } catch (error) {
+      console.error("Error fetching case briefs:", error);
+      res.status(500).json({ message: "Failed to fetch case briefs" });
+    }
+  });
+
+  app.get("/api/case-briefs/docket/:docketId", async (req, res) => {
+    try {
+      const docketId = parseId(req.params.docketId);
+      if (!docketId) return res.status(400).json({ message: "Invalid docket ID" });
+      const brief = await storage.getCaseBriefByDocket(docketId);
+      if (!brief) return res.status(404).json({ message: "No case brief found for this docket" });
+      res.json(brief);
+    } catch (error) {
+      console.error("Error fetching case brief:", error);
+      res.status(500).json({ message: "Failed to fetch case brief" });
+    }
+  });
+
+  app.post("/api/case-briefs", isAuthenticated, async (req: any, res) => {
+    try {
+      const { docketId, summary, decisionIssues, appellateIssues, judicialReview } = req.body;
+      if (!docketId || !summary || !decisionIssues || !appellateIssues || !judicialReview) {
+        return res.status(400).json({ message: "All brief fields are required" });
+      }
+      const brief = await storage.createCaseBrief({
+        docketId,
+        summary,
+        decisionIssues,
+        appellateIssues,
+        judicialReview,
+      });
+      res.status(201).json(brief);
+    } catch (error) {
+      console.error("Error creating case brief:", error);
+      res.status(500).json({ message: "Failed to create case brief" });
+    }
+  });
+
+  app.post("/api/case-briefs/generate", isAuthenticated, async (req: any, res) => {
+    try {
+      const docketId = parseId(req.body.docketId);
+      if (!docketId) return res.status(400).json({ message: "Invalid docket ID" });
+
+      const docket = await storage.getDocket(docketId);
+      if (!docket) return res.status(404).json({ message: "Docket not found" });
+
+      const events = await storage.getDocketEvents(docketId);
+
+      const eventsText = events.map(e =>
+        `- ${e.eventDate instanceof Date ? e.eventDate.toISOString().split("T")[0] : e.eventDate}: ${e.title} (${e.eventType})${e.description ? ` — ${e.description}` : ""}`
+      ).join("\n");
+
+      const systemPrompt = `You are a legal analyst specializing in Georgia Certificate of Need (CON) proceedings under O.C.G.A. § 31-6. Generate a comprehensive 1-2 page case brief for the following CON docket.
+
+The brief MUST be structured into exactly four sections with these exact headings:
+
+## CASE SUMMARY
+Provide a concise overview of the case including the applicant, facility, project description, relevant dates, current status, and key facts.
+
+## MAIN ISSUES AT THE DECISION LEVEL
+Identify and analyze the primary issues the Department of Community Health must evaluate in rendering its decision. Consider the CON review criteria: need, accessibility, quality of care, cost containment, and financial feasibility. Discuss how each criterion applies to this specific case.
+
+## APPELLATE ISSUES
+Identify potential grounds for appeal regardless of the decision outcome. Consider procedural issues, substantive challenges to need methodology, adequacy of the record, and any constitutional or statutory interpretation questions. Discuss the standard of review applicable to CON appeals under Georgia law.
+
+## JUDICIAL REVIEW PROCEEDINGS
+Outline the judicial review process available under Georgia law. Discuss venue, timing requirements, scope of review, burden of proof, and any relevant precedent that could affect judicial review of this particular case.
+
+Write in a professional, analytical legal tone. Be specific to the facts of this case. Reference O.C.G.A. § 31-6 provisions where applicable.`;
+
+      const userPrompt = `Generate a case brief for:
+
+Case Number: ${docket.caseNumber}
+Title: ${docket.title}
+Applicant: ${docket.applicant}
+Facility: ${docket.facilityName} (${docket.facilityType})
+County: ${docket.county}
+Status: ${docket.status.replace(/_/g, " ")}
+Filing Date: ${docket.filingDate}
+${docket.hearingDate ? `Hearing Date: ${docket.hearingDate}` : ""}
+${docket.decisionDate ? `Decision Date: ${docket.decisionDate}` : ""}
+Estimated Cost: ${docket.estimatedCost || "Not specified"}
+Description: ${docket.description || "Not provided"}
+
+Timeline Events:
+${eventsText || "No events recorded"}`;
+
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+
+      const heartbeat = setInterval(() => {
+        res.write(`: heartbeat\n\n`);
+      }, 15000);
+
+      try {
+        const openai = getOpenAI();
+        const stream = await openai.chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+          stream: true,
+          max_completion_tokens: 4096,
+        });
+
+        let fullContent = "";
+
+        for await (const chunk of stream) {
+          const content = chunk.choices[0]?.delta?.content || "";
+          if (content) {
+            fullContent += content;
+            res.write(`data: ${JSON.stringify({ content })}\n\n`);
+          }
+        }
+
+        // Parse sections from the generated content
+        const sections = parseBriefSections(fullContent);
+
+        // Save to database
+        const brief = await storage.createCaseBrief({
+          docketId,
+          summary: sections.summary,
+          decisionIssues: sections.decisionIssues,
+          appellateIssues: sections.appellateIssues,
+          judicialReview: sections.judicialReview,
+        });
+
+        res.write(`data: ${JSON.stringify({ done: true, briefId: brief.id })}\n\n`);
+      } finally {
+        clearInterval(heartbeat);
+      }
+
+      res.end();
+    } catch (error) {
+      console.error("Error generating case brief:", error);
+      if (res.headersSent) {
+        res.write(`data: ${JSON.stringify({ error: "Failed to generate case brief" })}\n\n`);
+        res.end();
+      } else {
+        res.status(500).json({ message: "Failed to generate case brief" });
+      }
+    }
+  });
+
   return httpServer;
+}
+
+function parseBriefSections(content: string) {
+  const sectionPatterns = [
+    { key: "summary", pattern: /##\s*CASE\s*SUMMARY\s*\n([\s\S]*?)(?=##\s*MAIN\s*ISSUES|$)/i },
+    { key: "decisionIssues", pattern: /##\s*MAIN\s*ISSUES\s*AT\s*THE\s*DECISION\s*LEVEL\s*\n([\s\S]*?)(?=##\s*APPELLATE\s*ISSUES|$)/i },
+    { key: "appellateIssues", pattern: /##\s*APPELLATE\s*ISSUES\s*\n([\s\S]*?)(?=##\s*JUDICIAL\s*REVIEW|$)/i },
+    { key: "judicialReview", pattern: /##\s*JUDICIAL\s*REVIEW\s*PROCEEDINGS\s*\n([\s\S]*?)$/i },
+  ];
+
+  const result: Record<string, string> = {
+    summary: "",
+    decisionIssues: "",
+    appellateIssues: "",
+    judicialReview: "",
+  };
+
+  for (const { key, pattern } of sectionPatterns) {
+    const match = content.match(pattern);
+    result[key] = match ? match[1].trim() : "";
+  }
+
+  // Fallback: if parsing fails, put everything in summary
+  if (!result.summary && !result.decisionIssues) {
+    result.summary = content;
+    result.decisionIssues = "See case summary above.";
+    result.appellateIssues = "See case summary above.";
+    result.judicialReview = "See case summary above.";
+  }
+
+  return result;
 }

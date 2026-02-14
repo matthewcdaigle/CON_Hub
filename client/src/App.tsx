@@ -16,6 +16,7 @@ import DocketDetail from "@/pages/docket-detail";
 import Research from "@/pages/research";
 import Drafting from "@/pages/drafting";
 import Alerts from "@/pages/alerts";
+import CaseBriefs from "@/pages/case-briefs";
 import NotFound from "@/pages/not-found";
 import { ErrorBoundary } from "@/components/error-boundary";
 
@@ -40,6 +41,7 @@ function AuthenticatedLayout() {
                 <Route path="/" component={Dashboard} />
                 <Route path="/dockets" component={Dockets} />
                 <Route path="/dockets/:id" component={DocketDetail} />
+                <Route path="/case-briefs" component={CaseBriefs} />
                 <Route path="/research" component={Research} />
                 <Route path="/drafting" component={Drafting} />
                 <Route path="/alerts" component={Alerts} />

@@ -1,12 +1,13 @@
 import {
   dockets, docketEvents, researchDocuments, docketSubscriptions,
-  notifications, draftTemplates, savedDrafts,
+  notifications, draftTemplates, savedDrafts, caseBriefs,
   type Docket, type InsertDocket, type DocketEvent, type InsertDocketEvent,
   type ResearchDocument, type InsertResearchDocument,
   type DocketSubscription, type InsertDocketSubscription,
   type Notification, type InsertNotification,
   type DraftTemplate, type InsertDraftTemplate,
   type SavedDraft, type InsertSavedDraft,
+  type CaseBrief, type InsertCaseBrief,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, ilike, or, sql, count } from "drizzle-orm";
@@ -54,6 +55,11 @@ export interface IStorage {
 
   getSavedDrafts(userId: string): Promise<SavedDraft[]>;
   createSavedDraft(draft: InsertSavedDraft): Promise<SavedDraft>;
+
+  getCaseBriefs(): Promise<CaseBrief[]>;
+  getCaseBriefByDocket(docketId: number): Promise<CaseBrief | undefined>;
+  createCaseBrief(brief: InsertCaseBrief): Promise<CaseBrief>;
+  updateCaseBrief(docketId: number, data: Partial<InsertCaseBrief>): Promise<CaseBrief | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -206,6 +212,39 @@ export class DatabaseStorage implements IStorage {
   async createSavedDraft(draft: InsertSavedDraft): Promise<SavedDraft> {
     const [created] = await db.insert(savedDrafts).values(draft).returning();
     return created;
+  }
+
+  async getCaseBriefs(): Promise<CaseBrief[]> {
+    return db.select().from(caseBriefs).orderBy(desc(caseBriefs.updatedAt));
+  }
+
+  async getCaseBriefByDocket(docketId: number): Promise<CaseBrief | undefined> {
+    const [brief] = await db.select().from(caseBriefs).where(eq(caseBriefs.docketId, docketId));
+    return brief;
+  }
+
+  async createCaseBrief(brief: InsertCaseBrief): Promise<CaseBrief> {
+    const [created] = await db.insert(caseBriefs).values(brief)
+      .onConflictDoUpdate({
+        target: caseBriefs.docketId,
+        set: {
+          summary: brief.summary,
+          decisionIssues: brief.decisionIssues,
+          appellateIssues: brief.appellateIssues,
+          judicialReview: brief.judicialReview,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    return created;
+  }
+
+  async updateCaseBrief(docketId: number, data: Partial<InsertCaseBrief>): Promise<CaseBrief | undefined> {
+    const [updated] = await db.update(caseBriefs)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(caseBriefs.docketId, docketId))
+      .returning();
+    return updated;
   }
 }
 

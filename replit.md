@@ -7,6 +7,7 @@ GA CON Counsel is a full-stack web application built for Georgia Certificate of 
 Core features:
 - **Docket Tracking** — Browse, search, and filter CON dockets by status, county, and facility type
 - **Docket Detail & Timeline** — View individual docket details with event history
+- **Case Briefs** — Structured legal analysis for each docket covering case summary, decision-level issues, appellate issues, and judicial review proceedings. AI-powered generation with SSE streaming via OpenAI.
 - **Research Library** — Search and filter legal research documents (statutes, regulations, decisions, etc.)
 - **AI-Powered Drafting** — Generate legal drafts using OpenAI with template support
 - **Alerts & Subscriptions** — Subscribe to docket updates and receive notifications
@@ -52,6 +53,7 @@ Key database tables:
 - `docket_subscriptions` — User subscriptions to docket updates
 - `notifications` — User notification feed
 - `draft_templates` and `saved_drafts` — AI drafting system
+- `case_briefs` — Structured legal analysis per docket (summary, decision issues, appellate issues, judicial review)
 - `conversations` and `messages` — Chat/AI conversation history
 
 ### Authentication

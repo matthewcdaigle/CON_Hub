@@ -114,10 +114,26 @@ export const savedDrafts = pgTable("saved_drafts", {
   index("saved_drafts_user_id_idx").on(table.userId),
 ]);
 
-export const docketsRelations = relations(dockets, ({ many }) => ({
+export const caseBriefs = pgTable("case_briefs", {
+  id: serial("id").primaryKey(),
+  docketId: integer("docket_id").notNull().references(() => dockets.id, { onDelete: "cascade" }).unique(),
+  summary: text("summary").notNull(),
+  decisionIssues: text("decision_issues").notNull(),
+  appellateIssues: text("appellate_issues").notNull(),
+  judicialReview: text("judicial_review").notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const docketsRelations = relations(dockets, ({ many, one }) => ({
   events: many(docketEvents),
   subscriptions: many(docketSubscriptions),
   documents: many(researchDocuments),
+  caseBrief: one(caseBriefs, { fields: [dockets.id], references: [caseBriefs.docketId] }),
+}));
+
+export const caseBriefsRelations = relations(caseBriefs, ({ one }) => ({
+  docket: one(dockets, { fields: [caseBriefs.docketId], references: [dockets.id] }),
 }));
 
 export const docketEventsRelations = relations(docketEvents, ({ one }) => ({
@@ -183,3 +199,12 @@ export type DraftTemplate = typeof draftTemplates.$inferSelect;
 export type InsertDraftTemplate = z.infer<typeof insertDraftTemplateSchema>;
 export type SavedDraft = typeof savedDrafts.$inferSelect;
 export type InsertSavedDraft = z.infer<typeof insertSavedDraftSchema>;
+
+export const insertCaseBriefSchema = createInsertSchema(caseBriefs).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type CaseBrief = typeof caseBriefs.$inferSelect;
+export type InsertCaseBrief = z.infer<typeof insertCaseBriefSchema>;

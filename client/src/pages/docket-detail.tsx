@@ -1,3 +1,4 @@
+import { useState, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, Link } from "wouter";
 import { Card } from "@/components/ui/card";
@@ -16,12 +17,17 @@ import {
   Scale,
   Clock,
   DollarSign,
+  BookOpen,
+  Loader2,
+  Gavel,
+  AlertTriangle,
+  FileCheck,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { statusColors, formatStatus } from "@/lib/docket-utils";
-import type { Docket, DocketEvent, DocketSubscription } from "@shared/schema";
+import type { Docket, DocketEvent, DocketSubscription, CaseBrief } from "@shared/schema";
 import { format } from "date-fns";
 
 const eventTypeIcons: Record<string, string> = {
@@ -40,6 +46,9 @@ export default function DocketDetail() {
   const docketId = params?.id ? parseInt(params.id) : 0;
   const { user } = useAuth();
   const { toast } = useToast();
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [streamedContent, setStreamedContent] = useState("");
+  const briefRef = useRef<HTMLDivElement>(null);
 
   const { data: docket, isLoading } = useQuery<Docket>({
     queryKey: ["/api/dockets", docketId],
@@ -54,7 +63,62 @@ export default function DocketDetail() {
     enabled: !!user,
   });
 
+  const { data: existingBrief, isLoading: briefLoading } = useQuery<CaseBrief>({
+    queryKey: ["/api/case-briefs/docket", docketId],
+  });
+
   const isSubscribed = subscriptions?.some((s) => s.docketId === docketId);
+
+  const generateBrief = async () => {
+    setIsGenerating(true);
+    setStreamedContent("");
+    try {
+      const response = await fetch("/api/case-briefs/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ docketId }),
+      });
+
+      if (!response.ok) throw new Error("Failed to generate brief");
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (reader) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.content) {
+                setStreamedContent((prev) => prev + data.content);
+              }
+              if (data.done) {
+                queryClient.invalidateQueries({ queryKey: ["/api/case-briefs/docket", docketId] });
+                queryClient.invalidateQueries({ queryKey: ["/api/case-briefs"] });
+                toast({ title: "Case Brief Generated", description: "The case brief has been saved." });
+              }
+              if (data.error) {
+                toast({ title: "Error", description: data.error, variant: "destructive" });
+              }
+            } catch {}
+          }
+        }
+      }
+    } catch (error) {
+      toast({ title: "Error", description: "Failed to generate case brief.", variant: "destructive" });
+    } finally {
+      setIsGenerating(false);
+    }
+  };
 
   const subscribeMutation = useMutation({
     mutationFn: async () => {
@@ -126,24 +190,44 @@ export default function DocketDetail() {
           </div>
           <p className="text-sm text-muted-foreground font-mono">{docket.caseNumber}</p>
         </div>
-        <Button
-          variant={isSubscribed ? "secondary" : "default"}
-          onClick={() => subscribeMutation.mutate()}
-          disabled={subscribeMutation.isPending}
-          data-testid="button-subscribe-docket"
-        >
-          {isSubscribed ? (
-            <>
-              <BellOff className="w-4 h-4 mr-2" />
-              Unsubscribe
-            </>
-          ) : (
-            <>
-              <Bell className="w-4 h-4 mr-2" />
-              Subscribe
-            </>
-          )}
-        </Button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button
+            variant="outline"
+            onClick={generateBrief}
+            disabled={isGenerating}
+            data-testid="button-generate-brief"
+          >
+            {isGenerating ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Generating...
+              </>
+            ) : (
+              <>
+                <BookOpen className="w-4 h-4 mr-2" />
+                {existingBrief ? "Regenerate Brief" : "Generate Brief"}
+              </>
+            )}
+          </Button>
+          <Button
+            variant={isSubscribed ? "secondary" : "default"}
+            onClick={() => subscribeMutation.mutate()}
+            disabled={subscribeMutation.isPending}
+            data-testid="button-subscribe-docket"
+          >
+            {isSubscribed ? (
+              <>
+                <BellOff className="w-4 h-4 mr-2" />
+                Unsubscribe
+              </>
+            ) : (
+              <>
+                <Bell className="w-4 h-4 mr-2" />
+                Subscribe
+              </>
+            )}
+          </Button>
+        </div>
       </div>
 
       <div className="grid lg:grid-cols-3 gap-6">
@@ -283,6 +367,65 @@ export default function DocketDetail() {
           </Card>
         </div>
       </div>
+
+      {(isGenerating || streamedContent || existingBrief) && (
+        <Card className="p-6 space-y-4" ref={briefRef}>
+          <div className="flex items-center justify-between gap-4">
+            <h2 className="font-serif font-semibold text-lg flex items-center gap-2">
+              <BookOpen className="w-5 h-5 text-primary" />
+              Case Brief
+            </h2>
+            {isGenerating && (
+              <Badge variant="secondary">
+                <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                Generating...
+              </Badge>
+            )}
+          </div>
+          <Separator />
+
+          {isGenerating || streamedContent ? (
+            <div className="text-sm leading-relaxed whitespace-pre-wrap" data-testid="text-streamed-brief">
+              {streamedContent}
+              {isGenerating && <span className="inline-block w-1.5 h-4 bg-primary animate-pulse ml-0.5" />}
+            </div>
+          ) : existingBrief ? (
+            <div className="space-y-6">
+              <section>
+                <div className="flex items-center gap-2 mb-2">
+                  <Scale className="w-4 h-4 text-primary" />
+                  <h3 className="font-serif font-semibold text-sm">Case Summary</h3>
+                </div>
+                <p className="text-sm leading-relaxed whitespace-pre-wrap" data-testid="text-existing-brief-summary">{existingBrief.summary}</p>
+              </section>
+              <Separator />
+              <section>
+                <div className="flex items-center gap-2 mb-2">
+                  <Gavel className="w-4 h-4 text-primary" />
+                  <h3 className="font-serif font-semibold text-sm">Main Issues at the Decision Level</h3>
+                </div>
+                <p className="text-sm leading-relaxed whitespace-pre-wrap" data-testid="text-existing-brief-decision">{existingBrief.decisionIssues}</p>
+              </section>
+              <Separator />
+              <section>
+                <div className="flex items-center gap-2 mb-2">
+                  <AlertTriangle className="w-4 h-4 text-primary" />
+                  <h3 className="font-serif font-semibold text-sm">Appellate Issues</h3>
+                </div>
+                <p className="text-sm leading-relaxed whitespace-pre-wrap" data-testid="text-existing-brief-appellate">{existingBrief.appellateIssues}</p>
+              </section>
+              <Separator />
+              <section>
+                <div className="flex items-center gap-2 mb-2">
+                  <FileCheck className="w-4 h-4 text-primary" />
+                  <h3 className="font-serif font-semibold text-sm">Judicial Review Proceedings</h3>
+                </div>
+                <p className="text-sm leading-relaxed whitespace-pre-wrap" data-testid="text-existing-brief-judicial">{existingBrief.judicialReview}</p>
+              </section>
+            </div>
+          ) : null}
+        </Card>
+      )}
     </div>
   );
 }

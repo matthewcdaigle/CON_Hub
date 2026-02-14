@@ -1,5 +1,5 @@
 import { useLocation, Link } from "wouter";
-import { Scale, LayoutDashboard, FileSearch, FileText, Bell, LogOut } from "lucide-react";
+import { Scale, LayoutDashboard, FileSearch, FileText, Bell, LogOut, BookOpen } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -22,6 +22,7 @@ import type { Notification } from "@shared/schema";
 const navItems = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
   { title: "Dockets", url: "/dockets", icon: Scale },
+  { title: "Case Briefs", url: "/case-briefs", icon: BookOpen },
   { title: "Research", url: "/research", icon: FileSearch },
   { title: "Drafting", url: "/drafting", icon: FileText },
   { title: "Alerts", url: "/alerts", icon: Bell },
@@ -31,12 +32,13 @@ export function AppSidebar() {
   const [location] = useLocation();
   const { user } = useAuth();
 
-  const { data: notifications } = useQuery<Notification[]>({
+  const { data: notificationsResult } = useQuery<{ data: Notification[] }>({
     queryKey: ["/api/notifications"],
     enabled: !!user,
   });
 
-  const unreadCount = notifications?.filter((n) => !n.read).length || 0;
+  const notificationsList = notificationsResult?.data || [];
+  const unreadCount = notificationsList.filter((n) => !n.read).length;
   const initials = user
     ? `${user.firstName?.charAt(0) || ""}${user.lastName?.charAt(0) || ""}`.toUpperCase() || "U"
     : "U";
