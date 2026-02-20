@@ -8,16 +8,34 @@ export * from "./models/chat";
 import { users } from "./models/auth";
 
 export const docketStatusEnum = pgEnum("docket_status", [
-  "pre_filing",
+  "loi_filed",
+  "loi_expired",
+  "loi_converted",
   "filed",
   "under_review",
-  "hearing_scheduled",
-  "hearing_complete",
-  "decision_pending",
+  "desk_determination_issued",
+  "appeal_hearing_officer_pending",
+  "appeal_hearing_officer_decided",
+  "appeal_con_panel_pending",
+  "appeal_con_panel_decided",
+  "appeal_superior_court_pending",
+  "appeal_superior_court_decided",
+  "appeal_court_of_appeals_pending",
+  "appeal_court_of_appeals_decided",
+  "appeal_supreme_court_pending",
+  "appeal_supreme_court_decided",
   "approved",
   "denied",
   "withdrawn",
-  "appealed",
+  "closed",
+]);
+
+export const docketTypeEnum = pgEnum("docket_type", [
+  "loi",
+  "con",
+  "det",
+  "det_eqt",
+  "det_asc",
 ]);
 
 export const dockets = pgTable("dockets", {
@@ -28,13 +46,18 @@ export const dockets = pgTable("dockets", {
   facilityName: text("facility_name").notNull(),
   facilityType: text("facility_type").notNull(),
   county: text("county").notNull(),
+  docketType: docketTypeEnum("docket_type").notNull(),
   status: docketStatusEnum("status").notNull().default("filed"),
+  parentDocketId: integer("parent_docket_id").references((): any => dockets.id, { onDelete: "set null" }),
   filingDate: timestamp("filing_date").notNull(),
   hearingDate: timestamp("hearing_date"),
   decisionDate: timestamp("decision_date"),
   description: text("description"),
   estimatedCost: text("estimated_cost"),
   laserficheUrl: text("laserfiche_url"),
+  equipmentType: text("equipment_type"),
+  bedCount: integer("bed_count"),
+  serviceType: text("service_type"),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
   updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 }, (table) => [

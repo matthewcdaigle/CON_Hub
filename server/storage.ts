@@ -32,6 +32,7 @@ export interface DocketFilters {
   status?: string;
   county?: string;
   facilityType?: string;
+  docketType?: string;
   page?: number;
   pageSize?: number;
 }
@@ -115,6 +116,10 @@ export class DatabaseStorage implements IStorage {
 
     if (filters?.facilityType) {
       conditions.push(ilike(dockets.facilityType, filters.facilityType));
+    }
+
+    if (filters?.docketType) {
+      conditions.push(eq(dockets.docketType, filters.docketType as typeof dockets.docketType.enumValues[number]));
     }
 
     const where = conditions.length > 0 ? and(...conditions) : undefined;

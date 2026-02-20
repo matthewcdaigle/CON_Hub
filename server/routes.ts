@@ -64,14 +64,22 @@ const generateDraftBody = z.object({
 });
 
 const docketStatuses = [
-  "pre_filing", "filed", "under_review", "hearing_scheduled",
-  "hearing_complete", "decision_pending", "approved", "denied",
-  "withdrawn", "appealed",
+  "loi_filed", "loi_expired", "loi_converted",
+  "filed", "under_review", "desk_determination_issued",
+  "appeal_hearing_officer_pending", "appeal_hearing_officer_decided",
+  "appeal_con_panel_pending", "appeal_con_panel_decided",
+  "appeal_superior_court_pending", "appeal_superior_court_decided",
+  "appeal_court_of_appeals_pending", "appeal_court_of_appeals_decided",
+  "appeal_supreme_court_pending", "appeal_supreme_court_decided",
+  "approved", "denied", "withdrawn", "closed",
 ] as const;
+
+const docketTypes = ["loi", "con", "det", "det_eqt", "det_asc"] as const;
 
 const docketListQuery = z.object({
   search: z.string().optional(),
   status: z.enum(docketStatuses).optional(),
+  docketType: z.enum(docketTypes).optional(),
   county: z.string().optional(),
   facilityType: z.string().optional(),
   page: z.coerce.number().int().min(1).optional(),
@@ -85,13 +93,18 @@ const createDocketBody = z.object({
   facilityName: z.string().min(1),
   facilityType: z.string().min(1),
   county: z.string().min(1),
+  docketType: z.enum(docketTypes),
   status: z.enum(docketStatuses).default("filed"),
+  parentDocketId: z.number().int().positive().nullable().optional(),
   filingDate: z.coerce.date(),
   hearingDate: z.coerce.date().nullable().optional(),
   decisionDate: z.coerce.date().nullable().optional(),
   description: z.string().nullable().optional(),
   estimatedCost: z.string().nullable().optional(),
   laserficheUrl: z.string().url().nullable().optional(),
+  equipmentType: z.string().nullable().optional(),
+  bedCount: z.number().int().positive().nullable().optional(),
+  serviceType: z.string().nullable().optional(),
 });
 
 const updateDocketBody = createDocketBody.partial();
