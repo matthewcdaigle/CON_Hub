@@ -1,15 +1,17 @@
 import {
   dockets, docketEvents, researchDocuments, docketSubscriptions,
-  notifications, draftTemplates, savedDrafts,
+  notifications, draftTemplates, savedDrafts, docketDocuments,
   type Docket, type InsertDocket, type DocketEvent, type InsertDocketEvent,
   type ResearchDocument, type InsertResearchDocument,
   type DocketSubscription, type InsertDocketSubscription,
   type Notification, type InsertNotification,
   type DraftTemplate, type InsertDraftTemplate,
   type SavedDraft, type InsertSavedDraft,
+  type DocketDocument, type InsertDocketDocument,
 } from "@shared/schema";
+import { users, type User } from "@shared/models/auth";
 import { db } from "./db";
-import { eq, desc, and, ilike, or, sql, count } from "drizzle-orm";
+import { eq, desc, and, ilike, or, sql, count, inArray } from "drizzle-orm";
 
 export interface PaginationParams {
   limit: number;
@@ -25,11 +27,30 @@ export interface PaginatedResult<T> {
 
 const DEFAULT_PAGE_LIMIT = 50;
 
+export interface DocketFilters {
+  search?: string;
+  status?: string;
+  county?: string;
+  facilityType?: string;
+  docketType?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface DocketListResult {
+  dockets: Docket[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
 export interface IStorage {
-  getDockets(pagination?: PaginationParams): Promise<PaginatedResult<Docket>>;
+  getDockets(filters?: DocketFilters): Promise<DocketListResult>;
   getDocket(id: number): Promise<Docket | undefined>;
   createDocket(docket: InsertDocket): Promise<Docket>;
   updateDocket(id: number, data: Partial<InsertDocket>): Promise<Docket | undefined>;
+  deleteDocket(id: number): Promise<boolean>;
 
   getDocketEvents(docketId: number): Promise<DocketEvent[]>;
   createDocketEvent(event: InsertDocketEvent): Promise<DocketEvent>;
@@ -54,22 +75,72 @@ export interface IStorage {
 
   getSavedDrafts(userId: string): Promise<SavedDraft[]>;
   createSavedDraft(draft: InsertSavedDraft): Promise<SavedDraft>;
+
+  createDocketDocument(doc: InsertDocketDocument): Promise<DocketDocument>;
+  getDocketDocuments(docketId: number): Promise<DocketDocument[]>;
+  getDocketDocument(id: number): Promise<DocketDocument | undefined>;
+  deleteDocketDocument(id: number): Promise<DocketDocument | undefined>;
+
+  getSubscribersForDocket(docketId: number): Promise<User[]>;
+  getUsersByRole(role: string): Promise<User[]>;
 }
 
 export class DatabaseStorage implements IStorage {
-  async getDockets(pagination?: PaginationParams): Promise<PaginatedResult<Docket>> {
-    const limit = pagination?.limit ?? DEFAULT_PAGE_LIMIT;
-    const offset = pagination?.offset ?? 0;
+  async getDockets(filters?: DocketFilters): Promise<DocketListResult> {
+    const page = Math.max(filters?.page ?? 1, 1);
+    const pageSize = Math.min(Math.max(filters?.pageSize ?? 20, 1), 100);
+    const offset = (page - 1) * pageSize;
+
+    const conditions = [];
+
+    if (filters?.search) {
+      const pattern = `%${filters.search}%`;
+      conditions.push(
+        or(
+          ilike(dockets.caseNumber, pattern),
+          ilike(dockets.title, pattern),
+          ilike(dockets.applicant, pattern),
+          ilike(dockets.facilityName, pattern),
+          ilike(dockets.county, pattern),
+        )!,
+      );
+    }
+
+    if (filters?.status) {
+      conditions.push(eq(dockets.status, filters.status as typeof dockets.status.enumValues[number]));
+    }
+
+    if (filters?.county) {
+      conditions.push(ilike(dockets.county, filters.county));
+    }
+
+    if (filters?.facilityType) {
+      conditions.push(ilike(dockets.facilityType, filters.facilityType));
+    }
+
+    if (filters?.docketType) {
+      conditions.push(eq(dockets.docketType, filters.docketType as typeof dockets.docketType.enumValues[number]));
+    }
+
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
 
     const [data, [{ total }]] = await Promise.all([
       db.select().from(dockets)
+        .where(where)
         .orderBy(desc(dockets.createdAt))
-        .limit(limit)
+        .limit(pageSize)
         .offset(offset),
-      db.select({ total: count() }).from(dockets),
+      db.select({ total: count() }).from(dockets)
+        .where(where),
     ]);
 
-    return { data, total, limit, offset };
+    return {
+      dockets: data,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize),
+    };
   }
 
   async getDocket(id: number): Promise<Docket | undefined> {
@@ -88,6 +159,13 @@ export class DatabaseStorage implements IStorage {
       .where(eq(dockets.id, id))
       .returning();
     return updated;
+  }
+
+  async deleteDocket(id: number): Promise<boolean> {
+    const result = await db.delete(dockets)
+      .where(eq(dockets.id, id))
+      .returning();
+    return result.length > 0;
   }
 
   async getDocketEvents(docketId: number): Promise<DocketEvent[]> {
@@ -206,6 +284,44 @@ export class DatabaseStorage implements IStorage {
   async createSavedDraft(draft: InsertSavedDraft): Promise<SavedDraft> {
     const [created] = await db.insert(savedDrafts).values(draft).returning();
     return created;
+  }
+
+  async createDocketDocument(doc: InsertDocketDocument): Promise<DocketDocument> {
+    const [created] = await db.insert(docketDocuments).values(doc).returning();
+    return created;
+  }
+
+  async getDocketDocuments(docketId: number): Promise<DocketDocument[]> {
+    return db.select().from(docketDocuments)
+      .where(eq(docketDocuments.docketId, docketId))
+      .orderBy(desc(docketDocuments.createdAt));
+  }
+
+  async getDocketDocument(id: number): Promise<DocketDocument | undefined> {
+    const [doc] = await db.select().from(docketDocuments)
+      .where(eq(docketDocuments.id, id));
+    return doc;
+  }
+
+  async deleteDocketDocument(id: number): Promise<DocketDocument | undefined> {
+    const [deleted] = await db.delete(docketDocuments)
+      .where(eq(docketDocuments.id, id))
+      .returning();
+    return deleted;
+  }
+
+  async getSubscribersForDocket(docketId: number): Promise<User[]> {
+    const subs = await db.select({ userId: docketSubscriptions.userId })
+      .from(docketSubscriptions)
+      .where(eq(docketSubscriptions.docketId, docketId));
+    if (subs.length === 0) return [];
+    return db.select().from(users)
+      .where(inArray(users.id, subs.map((s) => s.userId)));
+  }
+
+  async getUsersByRole(role: string): Promise<User[]> {
+    return db.select().from(users)
+      .where(eq(users.role, role as typeof users.role.enumValues[number]));
   }
 }
 

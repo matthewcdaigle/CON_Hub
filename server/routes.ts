@@ -1,13 +1,18 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
+import { setupAuth, registerAuthRoutes, isAuthenticated, requireAdmin } from "./replit_integrations/auth";
 import { z } from "zod";
 import {
   insertDocketSubscriptionSchema,
   insertSavedDraftSchema,
+  insertDocketEventSchema,
 } from "@shared/schema";
 import OpenAI from "openai";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
+import crypto from "crypto";
 
 // Lazy OpenAI initialization — fails at call time with a clear message
 // rather than silently creating a broken client at import time
@@ -57,6 +62,101 @@ const generateDraftBody = z.object({
   docketId: z.number().int().positive().nullable().optional(),
   existingContent: z.string().max(50000).nullable().optional(),
 });
+
+const docketStatuses = [
+  "loi_filed", "loi_expired", "loi_converted",
+  "filed", "under_review", "desk_determination_issued",
+  "appeal_hearing_officer_pending", "appeal_hearing_officer_decided",
+  "appeal_con_panel_pending", "appeal_con_panel_decided",
+  "appeal_superior_court_pending", "appeal_superior_court_decided",
+  "appeal_court_of_appeals_pending", "appeal_court_of_appeals_decided",
+  "appeal_supreme_court_pending", "appeal_supreme_court_decided",
+  "approved", "denied", "withdrawn", "closed",
+] as const;
+
+const docketTypes = ["loi", "con", "det", "det_eqt", "det_asc"] as const;
+
+const docketListQuery = z.object({
+  search: z.string().optional(),
+  status: z.enum(docketStatuses).optional(),
+  docketType: z.enum(docketTypes).optional(),
+  county: z.string().optional(),
+  facilityType: z.string().optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  pageSize: z.coerce.number().int().min(1).max(100).optional(),
+});
+
+const createDocketBody = z.object({
+  caseNumber: z.string().min(1).max(64),
+  title: z.string().min(1),
+  applicant: z.string().min(1),
+  facilityName: z.string().min(1),
+  facilityType: z.string().min(1),
+  county: z.string().min(1),
+  docketType: z.enum(docketTypes),
+  status: z.enum(docketStatuses).default("filed"),
+  parentDocketId: z.number().int().positive().nullable().optional(),
+  filingDate: z.coerce.date(),
+  hearingDate: z.coerce.date().nullable().optional(),
+  decisionDate: z.coerce.date().nullable().optional(),
+  description: z.string().nullable().optional(),
+  estimatedCost: z.string().nullable().optional(),
+  laserficheUrl: z.string().url().nullable().optional(),
+  equipmentType: z.string().nullable().optional(),
+  bedCount: z.number().int().positive().nullable().optional(),
+  serviceType: z.string().nullable().optional(),
+});
+
+const updateDocketBody = createDocketBody.partial();
+
+const createDocketEventBody = z.object({
+  title: z.string().min(1),
+  description: z.string().nullable().optional(),
+  eventDate: z.coerce.date(),
+  eventType: z.string().min(1),
+});
+
+/** Format a docket_status enum value for display in notifications. */
+function formatStatus(status: string): string {
+  return status.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
+}
+
+// ── File upload config ────────────────────────────────────
+
+const UPLOADS_DIR = path.resolve(process.cwd(), "uploads");
+fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+
+const ALLOWED_MIME_TYPES = new Set([
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "text/plain",
+]);
+
+const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination(_req, _file, cb) {
+      cb(null, UPLOADS_DIR);
+    },
+    filename(_req, file, cb) {
+      const unique = crypto.randomUUID();
+      const safeOriginal = file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
+      cb(null, `${unique}-${safeOriginal}`);
+    },
+  }),
+  limits: { fileSize: MAX_FILE_SIZE },
+  fileFilter(_req, file, cb) {
+    if (ALLOWED_MIME_TYPES.has(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Invalid file type. Accepted: PDF, Word (.docx), Excel (.xlsx), and plain text."));
+    }
+  },
+});
+
+const documentTypes = ["application", "order", "notice", "correspondence", "other"] as const;
 
 export async function registerRoutes(
   httpServer: Server,
@@ -108,8 +208,11 @@ export async function registerRoutes(
 
   app.get("/api/dockets", async (req, res) => {
     try {
-      const pagination = parsePagination(req.query);
-      const result = await storage.getDockets(pagination);
+      const parsed = docketListQuery.safeParse(req.query);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid query parameters", errors: parsed.error.flatten().fieldErrors });
+      }
+      const result = await storage.getDockets(parsed.data);
       res.json(result);
     } catch (error) {
       console.error("Error fetching dockets:", error);
@@ -139,6 +242,247 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error fetching events:", error);
       res.status(500).json({ message: "Failed to fetch events" });
+    }
+  });
+
+  app.post("/api/dockets/:id/events", isAuthenticated, requireAdmin, async (req: any, res) => {
+    try {
+      const docketId = parseId(req.params.id);
+      if (!docketId) return res.status(400).json({ message: "Invalid docket ID" });
+      const parsed = createDocketEventBody.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid request", errors: parsed.error.flatten().fieldErrors });
+      }
+
+      const docket = await storage.getDocket(docketId);
+      if (!docket) return res.status(404).json({ message: "Docket not found" });
+
+      const event = await storage.createDocketEvent({ docketId, ...parsed.data });
+      res.status(201).json(event);
+
+      // Fire-and-forget: notify all subscribers about the new timeline event
+      storage.getSubscribersForDocket(docketId).then((subscribers) =>
+        Promise.all(subscribers.map((subscriber) =>
+          storage.createNotification({
+            userId: subscriber.id,
+            docketId,
+            title: "New Timeline Event",
+            message: `New event on docket ${docket.caseNumber}: ${event.title}`,
+          }),
+        )),
+      ).catch((err) => console.error("Error creating timeline-event notifications:", err));
+    } catch (error) {
+      console.error("Error creating docket event:", error);
+      res.status(500).json({ message: "Failed to create docket event" });
+    }
+  });
+
+  app.post("/api/dockets", isAuthenticated, requireAdmin, async (req: any, res) => {
+    try {
+      const parsed = createDocketBody.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid request", errors: parsed.error.flatten().fieldErrors });
+      }
+      const docket = await storage.createDocket(parsed.data);
+      res.status(201).json(docket);
+
+      // Fire-and-forget: notify all admins about the new docket
+      storage.getUsersByRole("admin").then((admins) =>
+        Promise.all(admins.map((admin) =>
+          storage.createNotification({
+            userId: admin.id,
+            docketId: docket.id,
+            title: "New Docket Filed",
+            message: `Docket ${docket.caseNumber} has been created for ${docket.facilityName}.`,
+          }),
+        )),
+      ).catch((err) => console.error("Error creating new-docket notifications:", err));
+    } catch (error: any) {
+      if (error?.code === "23505") {
+        return res.status(409).json({ message: "A docket with this case number already exists" });
+      }
+      console.error("Error creating docket:", error);
+      res.status(500).json({ message: "Failed to create docket" });
+    }
+  });
+
+  app.patch("/api/dockets/:id", isAuthenticated, requireAdmin, async (req: any, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (!id) return res.status(400).json({ message: "Invalid docket ID" });
+      const parsed = updateDocketBody.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid request", errors: parsed.error.flatten().fieldErrors });
+      }
+
+      // Fetch old docket to detect status change
+      const oldDocket = parsed.data.status ? await storage.getDocket(id) : null;
+
+      const updated = await storage.updateDocket(id, parsed.data);
+      if (!updated) return res.status(404).json({ message: "Docket not found" });
+      res.json(updated);
+
+      // Fire-and-forget: if status changed, notify all subscribers
+      if (oldDocket && parsed.data.status && oldDocket.status !== parsed.data.status) {
+        storage.getSubscribersForDocket(id).then((subscribers) =>
+          Promise.all(subscribers.map((subscriber) =>
+            storage.createNotification({
+              userId: subscriber.id,
+              docketId: id,
+              title: "Docket Status Updated",
+              message: `Docket ${updated.caseNumber} status changed to ${formatStatus(updated.status)}.`,
+            }),
+          )),
+        ).catch((err) => console.error("Error creating status-change notifications:", err));
+      }
+    } catch (error: any) {
+      if (error?.code === "23505") {
+        return res.status(409).json({ message: "A docket with this case number already exists" });
+      }
+      console.error("Error updating docket:", error);
+      res.status(500).json({ message: "Failed to update docket" });
+    }
+  });
+
+  app.delete("/api/dockets/:id", isAuthenticated, requireAdmin, async (req: any, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (!id) return res.status(400).json({ message: "Invalid docket ID" });
+
+      const existing = await storage.getDocket(id);
+      if (!existing) return res.status(404).json({ message: "Docket not found" });
+
+      const deleted = await storage.deleteDocket(id);
+      if (!deleted) return res.status(404).json({ message: "Docket not found" });
+      res.status(204).send();
+    } catch (error: any) {
+      // FK constraint violation — dependent records exist
+      if (error?.code === "23503") {
+        return res.status(409).json({
+          message: "Cannot delete this docket because it has dependent records (e.g. research documents, notifications, or saved drafts). Remove those first.",
+        });
+      }
+      console.error("Error deleting docket:", error);
+      res.status(500).json({ message: "Failed to delete docket" });
+    }
+  });
+
+  // ── Docket Documents ─────────────────────────────────────
+
+  app.get("/api/dockets/:id/documents", isAuthenticated, async (req: any, res) => {
+    try {
+      const docketId = parseId(req.params.id);
+      if (!docketId) return res.status(400).json({ message: "Invalid docket ID" });
+      const docs = await storage.getDocketDocuments(docketId);
+      res.json(docs);
+    } catch (error) {
+      console.error("Error fetching docket documents:", error);
+      res.status(500).json({ message: "Failed to fetch documents" });
+    }
+  });
+
+  app.post("/api/dockets/:id/documents", isAuthenticated, requireAdmin, (req: any, res) => {
+    const singleUpload = upload.single("file");
+    singleUpload(req, res, async (err: any) => {
+      if (err instanceof multer.MulterError) {
+        if (err.code === "LIMIT_FILE_SIZE") {
+          return res.status(400).json({ message: "File too large. Maximum size is 50 MB." });
+        }
+        return res.status(400).json({ message: err.message });
+      }
+      if (err) {
+        return res.status(400).json({ message: err.message });
+      }
+
+      try {
+        const docketId = parseId(req.params.id);
+        if (!docketId) return res.status(400).json({ message: "Invalid docket ID" });
+
+        const file = req.file;
+        if (!file) return res.status(400).json({ message: "No file uploaded" });
+
+        const docket = await storage.getDocket(docketId);
+        if (!docket) {
+          fs.unlink(file.path, () => {});
+          return res.status(404).json({ message: "Docket not found" });
+        }
+
+        const documentType = req.body.documentType || "other";
+        if (!documentTypes.includes(documentType)) {
+          fs.unlink(file.path, () => {});
+          return res.status(400).json({ message: `Invalid document type. Accepted: ${documentTypes.join(", ")}` });
+        }
+
+        // Move file into docket subdirectory
+        const docketDir = path.join(UPLOADS_DIR, String(docketId));
+        fs.mkdirSync(docketDir, { recursive: true });
+        const finalPath = path.join(docketDir, file.filename);
+        fs.renameSync(file.path, finalPath);
+
+        const storageKey = `uploads/${docketId}/${file.filename}`;
+        const doc = await storage.createDocketDocument({
+          docketId,
+          uploadedBy: req.user.claims.sub,
+          filename: file.originalname,
+          storageKey,
+          mimeType: file.mimetype,
+          fileSize: file.size,
+          documentType,
+          description: req.body.description || null,
+        });
+
+        res.status(201).json(doc);
+      } catch (error) {
+        if (req.file) fs.unlink(req.file.path, () => {});
+        console.error("Error uploading document:", error);
+        res.status(500).json({ message: "Failed to upload document" });
+      }
+    });
+  });
+
+  app.get("/api/documents/:id/download", isAuthenticated, async (req: any, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (!id) return res.status(400).json({ message: "Invalid document ID" });
+      const doc = await storage.getDocketDocument(id);
+      if (!doc) return res.status(404).json({ message: "Document not found" });
+
+      const filePath = path.resolve(process.cwd(), doc.storageKey);
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ message: "File not found on disk" });
+      }
+
+      res.setHeader("Content-Type", doc.mimeType);
+      res.setHeader("Content-Disposition", `attachment; filename="${doc.filename.replace(/"/g, '\\"')}"`);
+      res.setHeader("Content-Length", doc.fileSize);
+      fs.createReadStream(filePath).pipe(res);
+    } catch (error) {
+      console.error("Error downloading document:", error);
+      res.status(500).json({ message: "Failed to download document" });
+    }
+  });
+
+  app.delete("/api/documents/:id", isAuthenticated, requireAdmin, async (req: any, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (!id) return res.status(400).json({ message: "Invalid document ID" });
+
+      const doc = await storage.getDocketDocument(id);
+      if (!doc) return res.status(404).json({ message: "Document not found" });
+
+      const deleted = await storage.deleteDocketDocument(id);
+      if (!deleted) return res.status(404).json({ message: "Document not found" });
+
+      // Remove file from disk (best-effort)
+      const filePath = path.resolve(process.cwd(), doc.storageKey);
+      fs.unlink(filePath, (err) => {
+        if (err) console.error("Failed to delete file from disk:", err);
+      });
+
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting document:", error);
+      res.status(500).json({ message: "Failed to delete document" });
     }
   });
 
