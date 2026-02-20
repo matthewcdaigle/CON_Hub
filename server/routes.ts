@@ -6,6 +6,7 @@ import { z } from "zod";
 import {
   insertDocketSubscriptionSchema,
   insertSavedDraftSchema,
+  insertDocketEventSchema,
 } from "@shared/schema";
 import OpenAI from "openai";
 
@@ -90,6 +91,18 @@ const createDocketBody = z.object({
 });
 
 const updateDocketBody = createDocketBody.partial();
+
+const createDocketEventBody = z.object({
+  title: z.string().min(1),
+  description: z.string().nullable().optional(),
+  eventDate: z.coerce.date(),
+  eventType: z.string().min(1),
+});
+
+/** Format a docket_status enum value for display in notifications. */
+function formatStatus(status: string): string {
+  return status.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
+}
 
 export async function registerRoutes(
   httpServer: Server,
@@ -178,6 +191,38 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/dockets/:id/events", isAuthenticated, requireAdmin, async (req: any, res) => {
+    try {
+      const docketId = parseId(req.params.id);
+      if (!docketId) return res.status(400).json({ message: "Invalid docket ID" });
+      const parsed = createDocketEventBody.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid request", errors: parsed.error.flatten().fieldErrors });
+      }
+
+      const docket = await storage.getDocket(docketId);
+      if (!docket) return res.status(404).json({ message: "Docket not found" });
+
+      const event = await storage.createDocketEvent({ docketId, ...parsed.data });
+      res.status(201).json(event);
+
+      // Fire-and-forget: notify all subscribers about the new timeline event
+      storage.getSubscribersForDocket(docketId).then((subscribers) =>
+        Promise.all(subscribers.map((subscriber) =>
+          storage.createNotification({
+            userId: subscriber.id,
+            docketId,
+            title: "New Timeline Event",
+            message: `New event on docket ${docket.caseNumber}: ${event.title}`,
+          }),
+        )),
+      ).catch((err) => console.error("Error creating timeline-event notifications:", err));
+    } catch (error) {
+      console.error("Error creating docket event:", error);
+      res.status(500).json({ message: "Failed to create docket event" });
+    }
+  });
+
   app.post("/api/dockets", isAuthenticated, requireAdmin, async (req: any, res) => {
     try {
       const parsed = createDocketBody.safeParse(req.body);
@@ -186,6 +231,18 @@ export async function registerRoutes(
       }
       const docket = await storage.createDocket(parsed.data);
       res.status(201).json(docket);
+
+      // Fire-and-forget: notify all admins about the new docket
+      storage.getUsersByRole("admin").then((admins) =>
+        Promise.all(admins.map((admin) =>
+          storage.createNotification({
+            userId: admin.id,
+            docketId: docket.id,
+            title: "New Docket Filed",
+            message: `Docket ${docket.caseNumber} has been created for ${docket.facilityName}.`,
+          }),
+        )),
+      ).catch((err) => console.error("Error creating new-docket notifications:", err));
     } catch (error: any) {
       if (error?.code === "23505") {
         return res.status(409).json({ message: "A docket with this case number already exists" });
@@ -203,9 +260,27 @@ export async function registerRoutes(
       if (!parsed.success) {
         return res.status(400).json({ message: "Invalid request", errors: parsed.error.flatten().fieldErrors });
       }
+
+      // Fetch old docket to detect status change
+      const oldDocket = parsed.data.status ? await storage.getDocket(id) : null;
+
       const updated = await storage.updateDocket(id, parsed.data);
       if (!updated) return res.status(404).json({ message: "Docket not found" });
       res.json(updated);
+
+      // Fire-and-forget: if status changed, notify all subscribers
+      if (oldDocket && parsed.data.status && oldDocket.status !== parsed.data.status) {
+        storage.getSubscribersForDocket(id).then((subscribers) =>
+          Promise.all(subscribers.map((subscriber) =>
+            storage.createNotification({
+              userId: subscriber.id,
+              docketId: id,
+              title: "Docket Status Updated",
+              message: `Docket ${updated.caseNumber} status changed to ${formatStatus(updated.status)}.`,
+            }),
+          )),
+        ).catch((err) => console.error("Error creating status-change notifications:", err));
+      }
     } catch (error: any) {
       if (error?.code === "23505") {
         return res.status(409).json({ message: "A docket with this case number already exists" });

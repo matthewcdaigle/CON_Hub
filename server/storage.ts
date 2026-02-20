@@ -8,8 +8,9 @@ import {
   type DraftTemplate, type InsertDraftTemplate,
   type SavedDraft, type InsertSavedDraft,
 } from "@shared/schema";
+import { users, type User } from "@shared/models/auth";
 import { db } from "./db";
-import { eq, desc, and, ilike, or, sql, count } from "drizzle-orm";
+import { eq, desc, and, ilike, or, sql, count, inArray } from "drizzle-orm";
 
 export interface PaginationParams {
   limit: number;
@@ -72,6 +73,9 @@ export interface IStorage {
 
   getSavedDrafts(userId: string): Promise<SavedDraft[]>;
   createSavedDraft(draft: InsertSavedDraft): Promise<SavedDraft>;
+
+  getSubscribersForDocket(docketId: number): Promise<User[]>;
+  getUsersByRole(role: string): Promise<User[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -269,6 +273,20 @@ export class DatabaseStorage implements IStorage {
   async createSavedDraft(draft: InsertSavedDraft): Promise<SavedDraft> {
     const [created] = await db.insert(savedDrafts).values(draft).returning();
     return created;
+  }
+
+  async getSubscribersForDocket(docketId: number): Promise<User[]> {
+    const subs = await db.select({ userId: docketSubscriptions.userId })
+      .from(docketSubscriptions)
+      .where(eq(docketSubscriptions.docketId, docketId));
+    if (subs.length === 0) return [];
+    return db.select().from(users)
+      .where(inArray(users.id, subs.map((s) => s.userId)));
+  }
+
+  async getUsersByRole(role: string): Promise<User[]> {
+    return db.select().from(users)
+      .where(eq(users.role, role as typeof users.role.enumValues[number]));
   }
 }
 
