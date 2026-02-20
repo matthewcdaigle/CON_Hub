@@ -72,37 +72,30 @@ export class Crawler {
       try {
         this.requestCount++;
         const res = await this.client.post(LISTING_ENDPOINT, body);
-        const data = res.data;
+        const raw = res.data;
 
-        // ASP.NET may wrap in { d: ... } or { d: "json-string" } or return directly
-        let payload = data?.d ?? data;
+        // Unwrap ASP.NET { d: ... } if present
+        let payload = raw?.d ?? raw;
         if (typeof payload === "string") {
           payload = JSON.parse(payload);
         }
 
-        // Normalize: look for entries/totalEntries at top level or nested
-        if (payload?.entries && typeof payload.totalEntries === "number") {
-          entries = payload.entries;
-          total = payload.totalEntries;
-        } else if (Array.isArray(payload)) {
-          entries = payload;
-          total = payload.length;
-        } else {
-          // Log the actual shape so we can diagnose
-          const keys = Object.keys(payload ?? {});
-          console.error(
-            `  Unexpected response shape for folder ${folderId} (start=${start}). Keys: [${keys.join(", ")}]`
-          );
-          console.error(
-            `  First 500 chars: ${JSON.stringify(payload).slice(0, 500)}`
-          );
+        // Extract entries from known response shapes
+        const parsed = this.extractEntries(payload);
+        if (!parsed) {
+          // Diagnostic: find all arrays in the response to locate entries
+          console.error(`  Could not find entries in response for folder ${folderId}.`);
+          console.error(`  Top-level keys: [${Object.keys(payload ?? {}).join(", ")}]`);
+          this.dumpArrays(payload, "root", 0);
           return;
         }
+        entries = parsed.entries;
+        total = parsed.total;
       } catch (err: any) {
         const status = err?.response?.status;
         if (err?.response?.data) {
           console.error(
-            `  Response body (first 500 chars): ${JSON.stringify(err.response.data).slice(0, 500)}`
+            `  Response body (first 1000 chars): ${JSON.stringify(err.response.data).slice(0, 1000)}`
           );
         }
         console.error(
@@ -123,6 +116,60 @@ export class Crawler {
 
       start = end;
     } while (start < totalEntries);
+  }
+
+  private extractEntries(
+    payload: any
+  ): { entries: FolderListingEntry[]; total: number } | null {
+    // Shape 1: { entries: [...], totalEntries: N }
+    if (payload?.entries && typeof payload.totalEntries === "number") {
+      return { entries: payload.entries, total: payload.totalEntries };
+    }
+    // Shape 2: plain array
+    if (Array.isArray(payload)) {
+      return { entries: payload, total: payload.length };
+    }
+    // Shape 3: { data: { ..., rows/items/listing/children: [...] } }
+    const inner = payload?.data ?? payload;
+    for (const key of ["rows", "items", "listing", "children", "entries"]) {
+      if (Array.isArray(inner?.[key])) {
+        const totalKey = ["totalEntries", "totalCount", "total", "count"].find(
+          (k) => typeof inner[k] === "number"
+        );
+        return {
+          entries: inner[key],
+          total: totalKey ? inner[totalKey] : inner[key].length,
+        };
+      }
+    }
+    return null;
+  }
+
+  /** Recursively find and log all arrays in the response (max depth 3) */
+  private dumpArrays(obj: any, path: string, depth: number): void {
+    if (depth > 3 || !obj || typeof obj !== "object") return;
+    for (const key of Object.keys(obj)) {
+      const val = obj[key];
+      const fullPath = `${path}.${key}`;
+      if (Array.isArray(val)) {
+        console.error(
+          `  ARRAY at ${fullPath}: length=${val.length}` +
+            (val.length > 0
+              ? `, first item keys: [${Object.keys(val[0] ?? {}).join(", ")}]`
+              : "")
+        );
+        if (val.length > 0) {
+          console.error(
+            `    First item: ${JSON.stringify(val[0]).slice(0, 300)}`
+          );
+        }
+      } else if (typeof val === "object" && val !== null) {
+        console.error(`  OBJECT at ${fullPath}: keys=[${Object.keys(val).join(", ")}]`);
+        this.dumpArrays(val, fullPath, depth + 1);
+      } else if (typeof val === "number") {
+        console.error(`  NUMBER at ${fullPath}: ${val}`);
+      }
+    }
   }
 
   private async processEntry(
