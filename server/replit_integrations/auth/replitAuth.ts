@@ -158,3 +158,19 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
     return;
   }
 };
+
+/** Must be chained after isAuthenticated. Checks that the DB user has role='admin'. */
+export const requireAdmin: RequestHandler = async (req, res, next) => {
+  const sessionUser = req.user as any;
+  const userId = sessionUser?.claims?.sub;
+  if (!userId) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+
+  const dbUser = await authStorage.getUser(userId);
+  if (!dbUser || dbUser.role !== "admin") {
+    return res.status(403).json({ message: "Forbidden" });
+  }
+
+  return next();
+};

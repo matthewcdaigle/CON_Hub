@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
+import { setupAuth, registerAuthRoutes, isAuthenticated, requireAdmin } from "./replit_integrations/auth";
 import { z } from "zod";
 import {
   insertDocketSubscriptionSchema,
@@ -166,7 +166,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/dockets", isAuthenticated, async (req: any, res) => {
+  app.post("/api/dockets", isAuthenticated, requireAdmin, async (req: any, res) => {
     try {
       const parsed = createDocketBody.safeParse(req.body);
       if (!parsed.success) {
@@ -183,7 +183,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/dockets/:id", isAuthenticated, async (req: any, res) => {
+  app.patch("/api/dockets/:id", isAuthenticated, requireAdmin, async (req: any, res) => {
     try {
       const id = parseId(req.params.id);
       if (!id) return res.status(400).json({ message: "Invalid docket ID" });
@@ -203,7 +203,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/dockets/:id", isAuthenticated, async (req: any, res) => {
+  app.delete("/api/dockets/:id", isAuthenticated, requireAdmin, async (req: any, res) => {
     try {
       const id = parseId(req.params.id);
       if (!id) return res.status(400).json({ message: "Invalid docket ID" });

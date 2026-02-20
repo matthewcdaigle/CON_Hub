@@ -165,7 +165,7 @@ export default function DocketDetail() {
           <p className="text-sm text-muted-foreground font-mono">{docket.caseNumber}</p>
         </div>
         <div className="flex items-center gap-2">
-          {user && (
+          {user?.role === "admin" && (
             <>
               <Button
                 variant="outline"

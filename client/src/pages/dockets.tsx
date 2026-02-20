@@ -66,7 +66,7 @@ export default function Dockets() {
             Monitor all Certificate of Need proceedings.
           </p>
         </div>
-        {user && (
+        {user?.role === "admin" && (
           <Button onClick={() => setShowCreateForm(true)}>
             <Plus className="w-4 h-4 mr-2" />
             New Docket
