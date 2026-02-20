@@ -16,6 +16,7 @@ import DocketDetail from "@/pages/docket-detail";
 import Research from "@/pages/research";
 import Drafting from "@/pages/drafting";
 import Alerts from "@/pages/alerts";
+import AdminImports from "@/pages/admin-imports";
 import NotFound from "@/pages/not-found";
 import { ErrorBoundary } from "@/components/error-boundary";
 
@@ -43,6 +44,7 @@ function AuthenticatedLayout() {
                 <Route path="/research" component={Research} />
                 <Route path="/drafting" component={Drafting} />
                 <Route path="/alerts" component={Alerts} />
+                <Route path="/admin/imports" component={AdminImports} />
                 <Route component={NotFound} />
               </Switch>
             </ErrorBoundary>

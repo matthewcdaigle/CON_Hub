@@ -1,5 +1,5 @@
 import { sql, relations } from "drizzle-orm";
-import { pgTable, text, varchar, serial, integer, timestamp, boolean, pgEnum, uniqueIndex, index } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, serial, integer, timestamp, boolean, pgEnum, uniqueIndex, index, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -153,6 +153,43 @@ export const savedDrafts = pgTable("saved_drafts", {
   index("saved_drafts_user_id_idx").on(table.userId),
 ]);
 
+export const importJobs = pgTable("import_jobs", {
+  id: serial("id").primaryKey(),
+  source: text("source").notNull(),
+  status: text("status").notNull().default("pending"),
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+  totalRecords: integer("total_records").notNull().default(0),
+  createdRecords: integer("created_records").notNull().default(0),
+  updatedRecords: integer("updated_records").notNull().default(0),
+  skippedRecords: integer("skipped_records").notNull().default(0),
+  failedRecords: integer("failed_records").notNull().default(0),
+  errorMessage: text("error_message"),
+  createdBy: varchar("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const importRecords = pgTable("import_records", {
+  id: serial("id").primaryKey(),
+  jobId: integer("job_id").notNull().references(() => importJobs.id, { onDelete: "cascade" }),
+  rowNumber: integer("row_number"),
+  caseNumber: text("case_number"),
+  action: text("action"),
+  errorMessage: text("error_message"),
+  rawData: jsonb("raw_data"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+}, (table) => [
+  index("import_records_job_id_idx").on(table.jobId),
+]);
+
+export const importJobsRelations = relations(importJobs, ({ many }) => ({
+  records: many(importRecords),
+}));
+
+export const importRecordsRelations = relations(importRecords, ({ one }) => ({
+  job: one(importJobs, { fields: [importRecords.jobId], references: [importJobs.id] }),
+}));
+
 export const docketsRelations = relations(dockets, ({ many }) => ({
   events: many(docketEvents),
   subscriptions: many(docketSubscriptions),
@@ -234,3 +271,18 @@ export type DraftTemplate = typeof draftTemplates.$inferSelect;
 export type InsertDraftTemplate = z.infer<typeof insertDraftTemplateSchema>;
 export type SavedDraft = typeof savedDrafts.$inferSelect;
 export type InsertSavedDraft = z.infer<typeof insertSavedDraftSchema>;
+
+export const insertImportJobSchema = createInsertSchema(importJobs).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertImportRecordSchema = createInsertSchema(importRecords).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type ImportJob = typeof importJobs.$inferSelect;
+export type InsertImportJob = z.infer<typeof insertImportJobSchema>;
+export type ImportRecord = typeof importRecords.$inferSelect;
+export type InsertImportRecord = z.infer<typeof insertImportRecordSchema>;

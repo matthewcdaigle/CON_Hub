@@ -1,5 +1,5 @@
 import { useLocation, Link } from "wouter";
-import { Scale, LayoutDashboard, FileSearch, FileText, Bell, LogOut } from "lucide-react";
+import { Scale, LayoutDashboard, FileSearch, FileText, Bell, LogOut, Upload } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -82,6 +82,23 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+        {user?.role === "admin" && (
+          <SidebarGroup>
+            <SidebarGroupLabel>Admin</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild data-active={location.startsWith("/admin/imports")}>
+                    <Link href="/admin/imports" data-testid="link-nav-imports">
+                      <Upload className="w-4 h-4" />
+                      <span>Imports</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
       </SidebarContent>
       <SidebarFooter className="p-4">
         <div className="flex items-center gap-3">

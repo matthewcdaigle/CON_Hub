@@ -13,6 +13,9 @@ import multer from "multer";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
+import { parse } from "csv-parse/sync";
+import { IngestionService } from "./services/ingestion";
+import type { IngestDocket } from "@shared/types";
 
 // Lazy OpenAI initialization — fails at call time with a clear message
 // rather than silently creating a broken client at import time
@@ -738,6 +741,163 @@ Generate professional, well-structured legal content. This content will be revie
       } else {
         res.status(500).json({ message: "Failed to generate draft" });
       }
+    }
+  });
+
+  // ── Import / Ingestion ───────────────────────────────────
+
+  const csvUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+    fileFilter(_req, file, cb) {
+      if (file.mimetype === "text/csv" || file.originalname.endsWith(".csv")) {
+        cb(null, true);
+      } else {
+        cb(new Error("Only CSV files are accepted."));
+      }
+    },
+  });
+
+  const ingestDocketSchema = z.object({
+    case_number: z.string().min(1),
+    docket_type: z.enum(docketTypes),
+    title: z.string().min(1),
+    status: z.enum(docketStatuses),
+    applicant: z.string().optional(),
+    facility_name: z.string().optional(),
+    facility_type: z.string().optional(),
+    county: z.string().optional(),
+    description: z.string().optional(),
+    filing_date: z.string().optional(),
+    hearing_date: z.string().optional(),
+    decision_date: z.string().optional(),
+    estimated_cost: z.coerce.number().optional(),
+    bed_count: z.coerce.number().int().optional(),
+    equipment_type: z.string().optional(),
+    service_type: z.string().optional(),
+    laserfiche_url: z.string().optional(),
+    parent_case_number: z.string().optional(),
+  });
+
+  const ingestionService = new IngestionService(storage);
+
+  app.post("/api/import/csv", isAuthenticated, requireAdmin, (req: any, res) => {
+    const singleCsv = csvUpload.single("file");
+    singleCsv(req, res, async (err: any) => {
+      if (err instanceof multer.MulterError) {
+        if (err.code === "LIMIT_FILE_SIZE") {
+          return res.status(400).json({ message: "CSV file too large. Maximum size is 10 MB." });
+        }
+        return res.status(400).json({ message: err.message });
+      }
+      if (err) {
+        return res.status(400).json({ message: err.message });
+      }
+
+      try {
+        const file = req.file;
+        if (!file) return res.status(400).json({ message: "No file uploaded" });
+
+        // Parse CSV
+        let rows: Record<string, string>[];
+        try {
+          rows = parse(file.buffer.toString("utf-8"), {
+            columns: true,
+            skip_empty_lines: true,
+            trim: true,
+          });
+        } catch (parseError: any) {
+          return res.status(400).json({ message: `Failed to parse CSV: ${parseError.message}` });
+        }
+
+        if (rows.length === 0) {
+          return res.status(400).json({ message: "CSV file is empty or has no data rows" });
+        }
+
+        // Create import job
+        const job = await storage.createImportJob({
+          source: "csv",
+          status: "pending",
+          totalRecords: rows.length,
+          createdBy: req.user.claims.sub,
+        });
+
+        // Validate each row
+        const validRecords: { data: IngestDocket; rowNumber: number }[] = [];
+        let failedValidation = 0;
+
+        for (let i = 0; i < rows.length; i++) {
+          const row = rows[i];
+          // Remove empty string values so optional fields don't fail
+          const cleaned: Record<string, unknown> = {};
+          for (const [k, v] of Object.entries(row)) {
+            if (v !== "") cleaned[k] = v;
+          }
+
+          const result = ingestDocketSchema.safeParse(cleaned);
+          if (result.success) {
+            validRecords.push({ data: result.data as IngestDocket, rowNumber: i + 1 });
+          } else {
+            failedValidation++;
+            await storage.createImportRecord({
+              jobId: job.id,
+              rowNumber: i + 1,
+              caseNumber: row.case_number || null,
+              action: "failed",
+              errorMessage: `Validation error: ${result.error.issues.map((e) => `${e.path.join(".")}: ${e.message}`).join("; ")}`,
+              rawData: row as unknown as Record<string, unknown>,
+            });
+          }
+        }
+
+        // Process valid records through ingestion service
+        const jobResult = await ingestionService.processJob(
+          job.id,
+          validRecords,
+          req.user.claims.sub,
+        );
+
+        // Adjust counts to include validation failures
+        jobResult.failedRecords += failedValidation;
+        jobResult.totalRecords = rows.length;
+
+        // Update job with final counts
+        await storage.updateImportJob(job.id, {
+          totalRecords: rows.length,
+          failedRecords: jobResult.failedRecords,
+        });
+
+        res.json(jobResult);
+      } catch (error) {
+        console.error("Error importing CSV:", error);
+        res.status(500).json({ message: "Failed to import CSV" });
+      }
+    });
+  });
+
+  app.get("/api/import/jobs", isAuthenticated, requireAdmin, async (_req: any, res) => {
+    try {
+      const jobs = await storage.getImportJobs(50);
+      res.json(jobs);
+    } catch (error) {
+      console.error("Error fetching import jobs:", error);
+      res.status(500).json({ message: "Failed to fetch import jobs" });
+    }
+  });
+
+  app.get("/api/import/jobs/:id", isAuthenticated, requireAdmin, async (req: any, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (!id) return res.status(400).json({ message: "Invalid job ID" });
+
+      const job = await storage.getImportJob(id);
+      if (!job) return res.status(404).json({ message: "Import job not found" });
+
+      const records = await storage.getImportRecords(id);
+      res.json({ ...job, records });
+    } catch (error) {
+      console.error("Error fetching import job:", error);
+      res.status(500).json({ message: "Failed to fetch import job" });
     }
   });
 

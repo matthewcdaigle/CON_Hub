@@ -1,6 +1,7 @@
 import {
   dockets, docketEvents, researchDocuments, docketSubscriptions,
   notifications, draftTemplates, savedDrafts, docketDocuments,
+  importJobs, importRecords,
   type Docket, type InsertDocket, type DocketEvent, type InsertDocketEvent,
   type ResearchDocument, type InsertResearchDocument,
   type DocketSubscription, type InsertDocketSubscription,
@@ -8,6 +9,8 @@ import {
   type DraftTemplate, type InsertDraftTemplate,
   type SavedDraft, type InsertSavedDraft,
   type DocketDocument, type InsertDocketDocument,
+  type ImportJob, type InsertImportJob,
+  type ImportRecord, type InsertImportRecord,
 } from "@shared/schema";
 import { users, type User } from "@shared/models/auth";
 import { db } from "./db";
@@ -83,6 +86,14 @@ export interface IStorage {
 
   getSubscribersForDocket(docketId: number): Promise<User[]>;
   getUsersByRole(role: string): Promise<User[]>;
+
+  createImportJob(job: InsertImportJob): Promise<ImportJob>;
+  updateImportJob(id: number, data: Partial<InsertImportJob>): Promise<ImportJob | undefined>;
+  createImportRecord(record: InsertImportRecord): Promise<ImportRecord>;
+  getImportJobs(limit?: number): Promise<ImportJob[]>;
+  getImportJob(id: number): Promise<ImportJob | undefined>;
+  getImportRecords(jobId: number): Promise<ImportRecord[]>;
+  getDocketByCaseNumber(caseNumber: string): Promise<Docket | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -322,6 +333,47 @@ export class DatabaseStorage implements IStorage {
   async getUsersByRole(role: string): Promise<User[]> {
     return db.select().from(users)
       .where(eq(users.role, role as typeof users.role.enumValues[number]));
+  }
+
+  async createImportJob(job: InsertImportJob): Promise<ImportJob> {
+    const [created] = await db.insert(importJobs).values(job).returning();
+    return created;
+  }
+
+  async updateImportJob(id: number, data: Partial<InsertImportJob>): Promise<ImportJob | undefined> {
+    const [updated] = await db.update(importJobs)
+      .set(data)
+      .where(eq(importJobs.id, id))
+      .returning();
+    return updated;
+  }
+
+  async createImportRecord(record: InsertImportRecord): Promise<ImportRecord> {
+    const [created] = await db.insert(importRecords).values(record).returning();
+    return created;
+  }
+
+  async getImportJobs(limit = 50): Promise<ImportJob[]> {
+    return db.select().from(importJobs)
+      .orderBy(desc(importJobs.createdAt))
+      .limit(limit);
+  }
+
+  async getImportJob(id: number): Promise<ImportJob | undefined> {
+    const [job] = await db.select().from(importJobs).where(eq(importJobs.id, id));
+    return job;
+  }
+
+  async getImportRecords(jobId: number): Promise<ImportRecord[]> {
+    return db.select().from(importRecords)
+      .where(eq(importRecords.jobId, jobId))
+      .orderBy(importRecords.rowNumber);
+  }
+
+  async getDocketByCaseNumber(caseNumber: string): Promise<Docket | undefined> {
+    const [docket] = await db.select().from(dockets)
+      .where(eq(dockets.caseNumber, caseNumber));
+    return docket;
   }
 }
 
