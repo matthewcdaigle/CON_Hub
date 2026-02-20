@@ -64,6 +64,15 @@ const docketStatuses = [
   "withdrawn", "appealed",
 ] as const;
 
+const docketListQuery = z.object({
+  search: z.string().optional(),
+  status: z.enum(docketStatuses).optional(),
+  county: z.string().optional(),
+  facilityType: z.string().optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  pageSize: z.coerce.number().int().min(1).max(100).optional(),
+});
+
 const createDocketBody = z.object({
   caseNumber: z.string().min(1).max(64),
   title: z.string().min(1),
@@ -132,8 +141,11 @@ export async function registerRoutes(
 
   app.get("/api/dockets", async (req, res) => {
     try {
-      const pagination = parsePagination(req.query);
-      const result = await storage.getDockets(pagination);
+      const parsed = docketListQuery.safeParse(req.query);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid query parameters", errors: parsed.error.flatten().fieldErrors });
+      }
+      const result = await storage.getDockets(parsed.data);
       res.json(result);
     } catch (error) {
       console.error("Error fetching dockets:", error);

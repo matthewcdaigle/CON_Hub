@@ -25,8 +25,25 @@ export interface PaginatedResult<T> {
 
 const DEFAULT_PAGE_LIMIT = 50;
 
+export interface DocketFilters {
+  search?: string;
+  status?: string;
+  county?: string;
+  facilityType?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface DocketListResult {
+  dockets: Docket[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
 export interface IStorage {
-  getDockets(pagination?: PaginationParams): Promise<PaginatedResult<Docket>>;
+  getDockets(filters?: DocketFilters): Promise<DocketListResult>;
   getDocket(id: number): Promise<Docket | undefined>;
   createDocket(docket: InsertDocket): Promise<Docket>;
   updateDocket(id: number, data: Partial<InsertDocket>): Promise<Docket | undefined>;
@@ -58,19 +75,57 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
-  async getDockets(pagination?: PaginationParams): Promise<PaginatedResult<Docket>> {
-    const limit = pagination?.limit ?? DEFAULT_PAGE_LIMIT;
-    const offset = pagination?.offset ?? 0;
+  async getDockets(filters?: DocketFilters): Promise<DocketListResult> {
+    const page = Math.max(filters?.page ?? 1, 1);
+    const pageSize = Math.min(Math.max(filters?.pageSize ?? 20, 1), 100);
+    const offset = (page - 1) * pageSize;
+
+    const conditions = [];
+
+    if (filters?.search) {
+      const pattern = `%${filters.search}%`;
+      conditions.push(
+        or(
+          ilike(dockets.caseNumber, pattern),
+          ilike(dockets.title, pattern),
+          ilike(dockets.applicant, pattern),
+          ilike(dockets.facilityName, pattern),
+          ilike(dockets.county, pattern),
+        )!,
+      );
+    }
+
+    if (filters?.status) {
+      conditions.push(eq(dockets.status, filters.status as typeof dockets.status.enumValues[number]));
+    }
+
+    if (filters?.county) {
+      conditions.push(ilike(dockets.county, filters.county));
+    }
+
+    if (filters?.facilityType) {
+      conditions.push(ilike(dockets.facilityType, filters.facilityType));
+    }
+
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
 
     const [data, [{ total }]] = await Promise.all([
       db.select().from(dockets)
+        .where(where)
         .orderBy(desc(dockets.createdAt))
-        .limit(limit)
+        .limit(pageSize)
         .offset(offset),
-      db.select({ total: count() }).from(dockets),
+      db.select({ total: count() }).from(dockets)
+        .where(where),
     ]);
 
-    return { data, total, limit, offset };
+    return {
+      dockets: data,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize),
+    };
   }
 
   async getDocket(id: number): Promise<Docket | undefined> {

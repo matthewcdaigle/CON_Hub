@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Link } from "wouter";
-import { Search, Scale, Building2, Calendar, MapPin, ArrowRight, ExternalLink, Plus } from "lucide-react";
+import { Search, Scale, Building2, Calendar, MapPin, ArrowRight, ExternalLink, Plus, ChevronLeft, ChevronRight } from "lucide-react";
 import { statusColors, formatStatus } from "@/lib/docket-utils";
 import { DocketFormDialog } from "@/components/docket-form-dialog";
 import { useAuth } from "@/hooks/use-auth";
@@ -34,28 +34,57 @@ const allStatuses = [
   "appealed",
 ];
 
+function useDebouncedValue<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+  return debounced;
+}
+
+interface DocketListResponse {
+  dockets: Docket[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
 export default function Dockets() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [page, setPage] = useState(1);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const { user } = useAuth();
 
-  const { data: docketsResponse, isLoading } = useQuery<{ data: Docket[]; total: number }>({
-    queryKey: ["/api/dockets"],
+  const debouncedSearch = useDebouncedValue(search, 300);
+
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, statusFilter]);
+
+  const queryParams = new URLSearchParams();
+  if (debouncedSearch) queryParams.set("search", debouncedSearch);
+  if (statusFilter !== "all") queryParams.set("status", statusFilter);
+  queryParams.set("page", String(page));
+  queryParams.set("pageSize", "20");
+  const queryString = queryParams.toString();
+
+  const { data: response, isLoading, isPlaceholderData } = useQuery<DocketListResponse>({
+    queryKey: ["/api/dockets", queryString],
+    queryFn: async () => {
+      const res = await fetch(`/api/dockets?${queryString}`);
+      if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
+      return res.json();
+    },
+    placeholderData: keepPreviousData,
   });
 
-  const dockets = docketsResponse?.data;
-
-  const filtered = (dockets || []).filter((d) => {
-    const matchesSearch =
-      !search ||
-      d.title.toLowerCase().includes(search.toLowerCase()) ||
-      d.caseNumber.toLowerCase().includes(search.toLowerCase()) ||
-      d.applicant.toLowerCase().includes(search.toLowerCase()) ||
-      d.county.toLowerCase().includes(search.toLowerCase());
-    const matchesStatus = statusFilter === "all" || d.status === statusFilter;
-    return matchesSearch && matchesStatus;
-  });
+  const dockets = response?.dockets ?? [];
+  const total = response?.total ?? 0;
+  const totalPages = response?.totalPages ?? 0;
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
@@ -113,7 +142,7 @@ export default function Dockets() {
             </Card>
           ))}
         </div>
-      ) : filtered.length === 0 ? (
+      ) : dockets.length === 0 ? (
         <Card className="p-12 text-center">
           <Scale className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
           <h3 className="font-serif text-lg font-semibold mb-1">No Dockets Found</h3>
@@ -125,7 +154,7 @@ export default function Dockets() {
         </Card>
       ) : (
         <div className="space-y-3">
-          {filtered.map((docket) => (
+          {dockets.map((docket) => (
             <Link key={docket.id} href={`/dockets/${docket.id}`}>
               <Card className="p-5 hover-elevate cursor-pointer" data-testid={`card-docket-${docket.id}`}>
                 <div className="flex items-start justify-between gap-4">
@@ -181,6 +210,38 @@ export default function Dockets() {
               </Card>
             </Link>
           ))}
+
+          {/* Pagination controls */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between pt-2">
+              <p className="text-sm text-muted-foreground">
+                {total} {total === 1 ? "docket" : "dockets"} found
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={page <= 1 || isPlaceholderData}
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  Previous
+                </Button>
+                <span className="text-sm tabular-nums px-2">
+                  Page {page} of {totalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={page >= totalPages || isPlaceholderData}
+                >
+                  Next
+                  <ChevronRight className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
