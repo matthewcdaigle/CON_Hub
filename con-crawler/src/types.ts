@@ -17,21 +17,6 @@ export interface FolderListingRequest {
   sortAscending: boolean;
 }
 
-export interface FolderListingEntry {
-  entryId: number;
-  name: string;
-  type: number; // 0 = folder, -2 = document
-  lastModified: string;
-  pageCount?: number;
-  parentId?: number;
-}
-
-export interface FolderListingResponse {
-  d: {
-    totalEntries: number;
-    entries: FolderListingEntry[];
-  };
-}
 
 export interface CrawledDocument {
   entryId: number;
