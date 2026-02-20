@@ -37,6 +37,8 @@ export class Crawler {
   private client: AxiosInstance;
   private documents: CrawledDocument[] = [];
   private requestCount = 0;
+  private foldersVisited = 0;
+  private startTime = 0;
 
   constructor(sessionCookie: string) {
     this.client = axios.create({
@@ -54,15 +56,28 @@ export class Crawler {
   async crawl(folderId: number, label: string): Promise<CrawledDocument[]> {
     this.documents = [];
     this.requestCount = 0;
+    this.foldersVisited = 0;
+    this.startTime = Date.now();
     console.log(`\n--- Crawling: ${label} (folder ${folderId}) ---`);
     await this.crawlFolder(folderId, label);
+    const elapsed = ((Date.now() - this.startTime) / 1000).toFixed(1);
     console.log(
-      `Finished "${label}": ${this.documents.length} documents found (${this.requestCount} requests made)`
+      `\nFinished "${label}": ${this.documents.length} documents, `
+      + `${this.foldersVisited} folders visited, `
+      + `${this.requestCount} API requests in ${elapsed}s`
     );
     return this.documents;
   }
 
+  private logProgress(): void {
+    const elapsed = ((Date.now() - this.startTime) / 1000).toFixed(0);
+    process.stdout.write(
+      `\r  [${elapsed}s] ${this.documents.length} docs | ${this.foldersVisited} folders | ${this.requestCount} requests`
+    );
+  }
+
   private async crawlFolder(folderId: number, path: string): Promise<void> {
+    this.foldersVisited++;
     let start = 0;
     let totalEntries = 0;
 
@@ -129,6 +144,8 @@ export class Crawler {
 
       const folderCount = validResults.filter((e) => e.type === ENTRY_TYPE_FOLDER).length;
       const docCount = validResults.length - folderCount;
+      // Clear progress line before printing folder details
+      process.stdout.write("\r" + " ".repeat(100) + "\r");
       console.log(
         `  Folder ${folderId} [${path}]: ${validResults.length} entries (${folderCount} folders, ${docCount} documents) `
         + `[${start}-${start + validResults.length} of ${totalEntries}]`
@@ -138,6 +155,7 @@ export class Crawler {
         await this.processEntry(entry, path);
       }
 
+      this.logProgress();
       start = end;
     } while (start < totalEntries);
   }
