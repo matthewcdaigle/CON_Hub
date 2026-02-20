@@ -1,7 +1,6 @@
 import axios, { AxiosInstance } from "axios";
 import {
   FolderListingRequest,
-  FolderListingResponse,
   FolderListingEntry,
   CrawledDocument,
 } from "./types";
@@ -68,20 +67,50 @@ export class Crawler {
         await sleep(REQUEST_DELAY_MS);
       }
 
-      let response: FolderListingResponse;
+      let entries: FolderListingEntry[];
+      let total: number;
       try {
         this.requestCount++;
         const res = await this.client.post(LISTING_ENDPOINT, body);
-        response = res.data as FolderListingResponse;
+        const data = res.data;
+
+        // ASP.NET may wrap in { d: ... } or { d: "json-string" } or return directly
+        let payload = data?.d ?? data;
+        if (typeof payload === "string") {
+          payload = JSON.parse(payload);
+        }
+
+        // Normalize: look for entries/totalEntries at top level or nested
+        if (payload?.entries && typeof payload.totalEntries === "number") {
+          entries = payload.entries;
+          total = payload.totalEntries;
+        } else if (Array.isArray(payload)) {
+          entries = payload;
+          total = payload.length;
+        } else {
+          // Log the actual shape so we can diagnose
+          const keys = Object.keys(payload ?? {});
+          console.error(
+            `  Unexpected response shape for folder ${folderId} (start=${start}). Keys: [${keys.join(", ")}]`
+          );
+          console.error(
+            `  First 500 chars: ${JSON.stringify(payload).slice(0, 500)}`
+          );
+          return;
+        }
       } catch (err: any) {
         const status = err?.response?.status;
+        if (err?.response?.data) {
+          console.error(
+            `  Response body (first 500 chars): ${JSON.stringify(err.response.data).slice(0, 500)}`
+          );
+        }
         console.error(
           `  Error fetching folder ${folderId} (start=${start}): HTTP ${status ?? "unknown"} - ${err.message}`
         );
         return;
       }
 
-      const { entries, totalEntries: total } = response.d;
       totalEntries = total;
 
       console.log(
