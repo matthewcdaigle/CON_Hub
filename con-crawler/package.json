@@ -1,0 +1,27 @@
+{
+  "name": "con-crawler",
+  "version": "1.0.0",
+  "description": "Crawls Georgia DCH Laserfiche repository for CON documents",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "ts-node src/index.ts",
+    "crawl": "ts-node src/index.ts --once",
+    "start:built": "node dist/index.js",
+    "crawl:built": "node dist/index.js --once"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.13.5",
+    "dotenv": "^17.3.1",
+    "node-cron": "^4.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.0",
+    "@types/node-cron": "^3.0.11",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}
