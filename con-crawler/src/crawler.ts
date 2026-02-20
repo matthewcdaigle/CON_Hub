@@ -1,10 +1,17 @@
 import axios, { AxiosInstance } from "axios";
+import * as fs from "fs";
+import * as path from "path";
 import { FolderListingRequest, CrawledDocument } from "./types";
 
 const BASE_URL = "https://weblink.dch.georgia.gov/WebLink";
 const LISTING_ENDPOINT = `${BASE_URL}/FolderListingService.aspx/GetFolderListing2`;
 const PAGE_SIZE = 200;
 const REQUEST_DELAY_MS = 2500;
+const CHECKPOINT_DIR = path.resolve(__dirname, "..", "data");
+const CHECKPOINT_PATH = path.join(CHECKPOINT_DIR, "checkpoint.json");
+
+/** Save a checkpoint every N folders */
+const CHECKPOINT_INTERVAL = 20;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -33,15 +40,37 @@ interface RawEntry {
   [key: string]: any;
 }
 
+/** A folder waiting to be crawled */
+interface PendingFolder {
+  folderId: number;
+  path: string;
+}
+
+/** Checkpoint saved to disk for resume support */
+export interface CrawlCheckpoint {
+  savedAt: string;
+  documents: CrawledDocument[];
+  pendingFolders: PendingFolder[];
+  foldersVisited: number;
+  requestCount: number;
+}
+
 export class Crawler {
   private client: AxiosInstance;
+  private sessionCookie: string;
   private documents: CrawledDocument[] = [];
   private requestCount = 0;
   private foldersVisited = 0;
   private startTime = 0;
+  private foldersSinceCheckpoint = 0;
 
   constructor(sessionCookie: string) {
-    this.client = axios.create({
+    this.sessionCookie = sessionCookie;
+    this.client = this.buildClient(sessionCookie);
+  }
+
+  private buildClient(sessionCookie: string): AxiosInstance {
+    return axios.create({
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
@@ -53,31 +82,98 @@ export class Crawler {
     });
   }
 
+  /**
+   * Update the session cookie (e.g. after the user refreshes it in .env).
+   */
+  updateSession(newCookie: string): void {
+    this.sessionCookie = newCookie;
+    this.client = this.buildClient(newCookie);
+  }
+
+  /**
+   * Start a fresh crawl from the given root folder.
+   */
   async crawl(folderId: number, label: string): Promise<CrawledDocument[]> {
     this.documents = [];
     this.requestCount = 0;
     this.foldersVisited = 0;
+    this.foldersSinceCheckpoint = 0;
     this.startTime = Date.now();
+
+    const queue: PendingFolder[] = [{ folderId, path: label }];
     console.log(`\n--- Crawling: ${label} (folder ${folderId}) ---`);
-    await this.crawlFolder(folderId, label);
-    const elapsed = ((Date.now() - this.startTime) / 1000).toFixed(1);
-    console.log(
-      `\nFinished "${label}": ${this.documents.length} documents, `
-      + `${this.foldersVisited} folders visited, `
-      + `${this.requestCount} API requests in ${elapsed}s`
-    );
+    await this.processQueue(queue);
+    this.printSummary(label);
     return this.documents;
   }
 
-  private logProgress(): void {
-    const elapsed = ((Date.now() - this.startTime) / 1000).toFixed(0);
-    process.stdout.write(
-      `\r  [${elapsed}s] ${this.documents.length} docs | ${this.foldersVisited} folders | ${this.requestCount} requests`
+  /**
+   * Resume a crawl from a saved checkpoint.
+   */
+  async resume(): Promise<CrawledDocument[]> {
+    const cp = Crawler.loadCheckpoint();
+    if (!cp) {
+      throw new Error("No checkpoint file found to resume from.");
+    }
+
+    this.documents = cp.documents;
+    this.requestCount = cp.requestCount;
+    this.foldersVisited = cp.foldersVisited;
+    this.foldersSinceCheckpoint = 0;
+    this.startTime = Date.now();
+
+    console.log(
+      `\n--- Resuming crawl: ${cp.documents.length} docs already collected, `
+      + `${cp.pendingFolders.length} folders remaining ---`
     );
+
+    await this.processQueue(cp.pendingFolders);
+    this.printSummary("resumed crawl");
+    Crawler.deleteCheckpoint();
+    return this.documents;
   }
 
-  private async crawlFolder(folderId: number, path: string): Promise<void> {
+  /**
+   * Iterative BFS over the folder queue.  Each folder is fully paginated
+   * before moving to the next.  Sub-folders discovered are appended to the
+   * end of the queue.
+   */
+  private async processQueue(queue: PendingFolder[]): Promise<void> {
+    while (queue.length > 0) {
+      const folder = queue.shift()!;
+      const subFolders = await this.crawlFolder(folder.folderId, folder.path);
+
+      if (subFolders === null) {
+        // Auth failure — save checkpoint with this folder back in the queue
+        queue.unshift(folder);
+        this.saveCheckpoint(queue);
+        throw new SessionExpiredError(
+          `Session expired after ${this.requestCount} requests. `
+          + `Checkpoint saved with ${this.documents.length} docs and ${queue.length} folders remaining.`
+        );
+      }
+
+      // Append discovered sub-folders to the queue
+      queue.push(...subFolders);
+
+      this.foldersSinceCheckpoint++;
+      if (this.foldersSinceCheckpoint >= CHECKPOINT_INTERVAL) {
+        this.saveCheckpoint(queue);
+        this.foldersSinceCheckpoint = 0;
+      }
+    }
+  }
+
+  /**
+   * Crawl a single folder, paginating through all entries.
+   * Returns discovered sub-folders, or null if the session expired.
+   */
+  private async crawlFolder(
+    folderId: number,
+    folderPath: string
+  ): Promise<PendingFolder[] | null> {
     this.foldersVisited++;
+    const subFolders: PendingFolder[] = [];
     let start = 0;
     let totalEntries = 0;
 
@@ -118,13 +214,22 @@ export class Crawler {
           console.error(
             `  Full response (first 2000 chars): ${JSON.stringify(payload).slice(0, 2000)}`
           );
-          return;
+          return subFolders;
         }
 
         results = inner.results;
         total = typeof inner.totalEntries === "number" ? inner.totalEntries : results.length;
       } catch (err: any) {
         const status = err?.response?.status;
+
+        // Detect session expiry (401, 403, or redirect to login)
+        if (status === 401 || status === 403) {
+          console.error(
+            `\n  Session expired (HTTP ${status}) while fetching folder ${folderId}`
+          );
+          return null;
+        }
+
         if (err?.response?.data) {
           console.error(
             `  Response body (first 1000 chars): ${JSON.stringify(err.response.data).slice(0, 1000)}`
@@ -133,7 +238,7 @@ export class Crawler {
         console.error(
           `  Error fetching folder ${folderId} (start=${start}): HTTP ${status ?? "unknown"} - ${err.message}`
         );
-        return;
+        return subFolders;
       }
 
       totalEntries = total;
@@ -147,17 +252,51 @@ export class Crawler {
       // Clear progress line before printing folder details
       process.stdout.write("\r" + " ".repeat(100) + "\r");
       console.log(
-        `  Folder ${folderId} [${path}]: ${validResults.length} entries (${folderCount} folders, ${docCount} documents) `
+        `  Folder ${folderId} [${folderPath}]: ${validResults.length} entries (${folderCount} folders, ${docCount} documents) `
         + `[${start}-${start + validResults.length} of ${totalEntries}]`
       );
 
       for (const entry of validResults) {
-        await this.processEntry(entry, path);
+        if (entry.type === ENTRY_TYPE_FOLDER) {
+          subFolders.push({
+            folderId: entry.entryId,
+            path: `${folderPath}/${entry.name}`,
+          });
+        } else {
+          const doc: CrawledDocument = {
+            entryId: entry.entryId,
+            name: entry.name,
+            path: folderPath,
+            lastModified: Crawler.extractLastModified(entry),
+            pageCount: entry.thumbnailPageCount ?? 0,
+            url: buildDocUrl(entry.entryId),
+          };
+          this.documents.push(doc);
+        }
       }
 
       this.logProgress();
       start = end;
     } while (start < totalEntries);
+
+    return subFolders;
+  }
+
+  private logProgress(): void {
+    const elapsed = ((Date.now() - this.startTime) / 1000).toFixed(0);
+    process.stdout.write(
+      `\r  [${elapsed}s] ${this.documents.length} docs | ${this.foldersVisited} folders | ${this.requestCount} requests`
+    );
+  }
+
+  private printSummary(label: string): void {
+    const elapsed = ((Date.now() - this.startTime) / 1000).toFixed(1);
+    process.stdout.write("\r" + " ".repeat(100) + "\r");
+    console.log(
+      `\nFinished "${label}": ${this.documents.length} documents, `
+      + `${this.foldersVisited} folders visited, `
+      + `${this.requestCount} API requests in ${elapsed}s`
+    );
   }
 
   /**
@@ -188,25 +327,50 @@ export class Crawler {
     return "";
   }
 
-  private async processEntry(
-    entry: RawEntry,
-    parentPath: string
-  ): Promise<void> {
-    if (entry.type === ENTRY_TYPE_FOLDER) {
-      // Folder -- recurse into it
-      const folderPath = `${parentPath}/${entry.name}`;
-      await this.crawlFolder(entry.entryId, folderPath);
-    } else {
-      // Any non-folder entry is treated as a document (edoc or regular file).
-      const doc: CrawledDocument = {
-        entryId: entry.entryId,
-        name: entry.name,
-        path: parentPath,
-        lastModified: Crawler.extractLastModified(entry),
-        pageCount: entry.thumbnailPageCount ?? 0,
-        url: buildDocUrl(entry.entryId),
-      };
-      this.documents.push(doc);
+  // ---------- Checkpoint persistence ----------
+
+  private saveCheckpoint(pendingFolders: PendingFolder[]): void {
+    if (!fs.existsSync(CHECKPOINT_DIR)) {
+      fs.mkdirSync(CHECKPOINT_DIR, { recursive: true });
     }
+    const cp: CrawlCheckpoint = {
+      savedAt: new Date().toISOString(),
+      documents: this.documents,
+      pendingFolders,
+      foldersVisited: this.foldersVisited,
+      requestCount: this.requestCount,
+    };
+    fs.writeFileSync(CHECKPOINT_PATH, JSON.stringify(cp), "utf-8");
+    process.stdout.write("\r" + " ".repeat(100) + "\r");
+    console.log(
+      `  [checkpoint] Saved: ${this.documents.length} docs, ${pendingFolders.length} folders remaining → ${CHECKPOINT_PATH}`
+    );
+  }
+
+  static loadCheckpoint(): CrawlCheckpoint | null {
+    if (!fs.existsSync(CHECKPOINT_PATH)) return null;
+    const raw = fs.readFileSync(CHECKPOINT_PATH, "utf-8");
+    return JSON.parse(raw) as CrawlCheckpoint;
+  }
+
+  static deleteCheckpoint(): void {
+    if (fs.existsSync(CHECKPOINT_PATH)) {
+      fs.unlinkSync(CHECKPOINT_PATH);
+    }
+  }
+
+  static hasCheckpoint(): boolean {
+    return fs.existsSync(CHECKPOINT_PATH);
+  }
+}
+
+/**
+ * Thrown when the session cookie has expired.
+ * The caller should catch this, prompt for a new cookie, and resume.
+ */
+export class SessionExpiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionExpiredError";
   }
 }
