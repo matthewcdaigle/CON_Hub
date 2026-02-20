@@ -58,6 +58,30 @@ const generateDraftBody = z.object({
   existingContent: z.string().max(50000).nullable().optional(),
 });
 
+const docketStatuses = [
+  "pre_filing", "filed", "under_review", "hearing_scheduled",
+  "hearing_complete", "decision_pending", "approved", "denied",
+  "withdrawn", "appealed",
+] as const;
+
+const createDocketBody = z.object({
+  caseNumber: z.string().min(1).max(64),
+  title: z.string().min(1),
+  applicant: z.string().min(1),
+  facilityName: z.string().min(1),
+  facilityType: z.string().min(1),
+  county: z.string().min(1),
+  status: z.enum(docketStatuses).default("filed"),
+  filingDate: z.coerce.date(),
+  hearingDate: z.coerce.date().nullable().optional(),
+  decisionDate: z.coerce.date().nullable().optional(),
+  description: z.string().nullable().optional(),
+  estimatedCost: z.string().nullable().optional(),
+  laserficheUrl: z.string().url().nullable().optional(),
+});
+
+const updateDocketBody = createDocketBody.partial();
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -139,6 +163,66 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error fetching events:", error);
       res.status(500).json({ message: "Failed to fetch events" });
+    }
+  });
+
+  app.post("/api/dockets", isAuthenticated, async (req: any, res) => {
+    try {
+      const parsed = createDocketBody.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid request", errors: parsed.error.flatten().fieldErrors });
+      }
+      const docket = await storage.createDocket(parsed.data);
+      res.status(201).json(docket);
+    } catch (error: any) {
+      if (error?.code === "23505") {
+        return res.status(409).json({ message: "A docket with this case number already exists" });
+      }
+      console.error("Error creating docket:", error);
+      res.status(500).json({ message: "Failed to create docket" });
+    }
+  });
+
+  app.patch("/api/dockets/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (!id) return res.status(400).json({ message: "Invalid docket ID" });
+      const parsed = updateDocketBody.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid request", errors: parsed.error.flatten().fieldErrors });
+      }
+      const updated = await storage.updateDocket(id, parsed.data);
+      if (!updated) return res.status(404).json({ message: "Docket not found" });
+      res.json(updated);
+    } catch (error: any) {
+      if (error?.code === "23505") {
+        return res.status(409).json({ message: "A docket with this case number already exists" });
+      }
+      console.error("Error updating docket:", error);
+      res.status(500).json({ message: "Failed to update docket" });
+    }
+  });
+
+  app.delete("/api/dockets/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (!id) return res.status(400).json({ message: "Invalid docket ID" });
+
+      const existing = await storage.getDocket(id);
+      if (!existing) return res.status(404).json({ message: "Docket not found" });
+
+      const deleted = await storage.deleteDocket(id);
+      if (!deleted) return res.status(404).json({ message: "Docket not found" });
+      res.status(204).send();
+    } catch (error: any) {
+      // FK constraint violation — dependent records exist
+      if (error?.code === "23503") {
+        return res.status(409).json({
+          message: "Cannot delete this docket because it has dependent records (e.g. research documents, notifications, or saved drafts). Remove those first.",
+        });
+      }
+      console.error("Error deleting docket:", error);
+      res.status(500).json({ message: "Failed to delete docket" });
     }
   });
 

@@ -13,8 +13,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Link } from "wouter";
-import { Search, Scale, Building2, Calendar, MapPin, ArrowRight, ExternalLink } from "lucide-react";
+import { Search, Scale, Building2, Calendar, MapPin, ArrowRight, ExternalLink, Plus } from "lucide-react";
 import { statusColors, formatStatus } from "@/lib/docket-utils";
+import { DocketFormDialog } from "@/components/docket-form-dialog";
+import { useAuth } from "@/hooks/use-auth";
 import type { Docket } from "@shared/schema";
 import { format } from "date-fns";
 
@@ -35,6 +37,8 @@ const allStatuses = [
 export default function Dockets() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const { user } = useAuth();
 
   const { data: docketsResponse, isLoading } = useQuery<{ data: Docket[]; total: number }>({
     queryKey: ["/api/dockets"],
@@ -62,7 +66,15 @@ export default function Dockets() {
             Monitor all Certificate of Need proceedings.
           </p>
         </div>
+        {user && (
+          <Button onClick={() => setShowCreateForm(true)}>
+            <Plus className="w-4 h-4 mr-2" />
+            New Docket
+          </Button>
+        )}
       </div>
+
+      <DocketFormDialog open={showCreateForm} onOpenChange={setShowCreateForm} />
 
       <div className="flex items-center gap-3 flex-wrap">
         <div className="relative flex-1 min-w-[200px] max-w-sm">

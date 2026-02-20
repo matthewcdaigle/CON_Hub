@@ -30,6 +30,7 @@ export interface IStorage {
   getDocket(id: number): Promise<Docket | undefined>;
   createDocket(docket: InsertDocket): Promise<Docket>;
   updateDocket(id: number, data: Partial<InsertDocket>): Promise<Docket | undefined>;
+  deleteDocket(id: number): Promise<boolean>;
 
   getDocketEvents(docketId: number): Promise<DocketEvent[]>;
   createDocketEvent(event: InsertDocketEvent): Promise<DocketEvent>;
@@ -88,6 +89,13 @@ export class DatabaseStorage implements IStorage {
       .where(eq(dockets.id, id))
       .returning();
     return updated;
+  }
+
+  async deleteDocket(id: number): Promise<boolean> {
+    const result = await db.delete(dockets)
+      .where(eq(dockets.id, id))
+      .returning();
+    return result.length > 0;
   }
 
   async getDocketEvents(docketId: number): Promise<DocketEvent[]> {

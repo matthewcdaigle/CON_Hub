@@ -1,10 +1,21 @@
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useRoute, Link } from "wouter";
+import { useRoute, Link, useLocation } from "wouter";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   ArrowLeft,
   Bell,
@@ -16,11 +27,14 @@ import {
   Scale,
   Clock,
   DollarSign,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { statusColors, formatStatus } from "@/lib/docket-utils";
+import { DocketFormDialog } from "@/components/docket-form-dialog";
 import type { Docket, DocketEvent, DocketSubscription } from "@shared/schema";
 import { format } from "date-fns";
 
@@ -40,6 +54,9 @@ export default function DocketDetail() {
   const docketId = params?.id ? parseInt(params.id) : 0;
   const { user } = useAuth();
   const { toast } = useToast();
+  const [, navigate] = useLocation();
+  const [showEditForm, setShowEditForm] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const { data: docket, isLoading } = useQuery<Docket>({
     queryKey: ["/api/dockets", docketId],
@@ -74,6 +91,27 @@ export default function DocketDetail() {
         description: isSubscribed
           ? "You will no longer receive alerts for this docket."
           : "You will receive alerts when this docket is updated.",
+      });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("DELETE", `/api/dockets/${docketId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/dockets"] });
+      toast({
+        title: "Docket Deleted",
+        description: "The docket has been permanently removed.",
+      });
+      navigate("/dockets");
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Cannot Delete",
+        description: error.message || "Failed to delete docket.",
+        variant: "destructive",
       });
     },
   });
@@ -126,25 +164,80 @@ export default function DocketDetail() {
           </div>
           <p className="text-sm text-muted-foreground font-mono">{docket.caseNumber}</p>
         </div>
-        <Button
-          variant={isSubscribed ? "secondary" : "default"}
-          onClick={() => subscribeMutation.mutate()}
-          disabled={subscribeMutation.isPending}
-          data-testid="button-subscribe-docket"
-        >
-          {isSubscribed ? (
+        <div className="flex items-center gap-2">
+          {user && (
             <>
-              <BellOff className="w-4 h-4 mr-2" />
-              Unsubscribe
-            </>
-          ) : (
-            <>
-              <Bell className="w-4 h-4 mr-2" />
-              Subscribe
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowEditForm(true)}
+              >
+                <Pencil className="w-4 h-4 mr-2" />
+                Edit
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-destructive hover:text-destructive"
+                onClick={() => setShowDeleteConfirm(true)}
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Delete
+              </Button>
             </>
           )}
-        </Button>
+          <Button
+            variant={isSubscribed ? "secondary" : "default"}
+            size="sm"
+            onClick={() => subscribeMutation.mutate()}
+            disabled={subscribeMutation.isPending}
+            data-testid="button-subscribe-docket"
+          >
+            {isSubscribed ? (
+              <>
+                <BellOff className="w-4 h-4 mr-2" />
+                Unsubscribe
+              </>
+            ) : (
+              <>
+                <Bell className="w-4 h-4 mr-2" />
+                Subscribe
+              </>
+            )}
+          </Button>
+        </div>
       </div>
+
+      {docket && (
+        <DocketFormDialog
+          open={showEditForm}
+          onOpenChange={setShowEditForm}
+          docket={docket}
+        />
+      )}
+
+      <AlertDialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Docket</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete "{docket.title}"? This action cannot be
+              undone. If this docket has dependent records (research documents,
+              notifications, or saved drafts), deletion will be blocked.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => deleteMutation.mutate()}
+              disabled={deleteMutation.isPending}
+            >
+              {deleteMutation.isPending ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <div className="grid lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
