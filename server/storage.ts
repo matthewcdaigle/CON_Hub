@@ -1,12 +1,13 @@
 import {
   dockets, docketEvents, researchDocuments, docketSubscriptions,
-  notifications, draftTemplates, savedDrafts,
+  notifications, draftTemplates, savedDrafts, docketDocuments,
   type Docket, type InsertDocket, type DocketEvent, type InsertDocketEvent,
   type ResearchDocument, type InsertResearchDocument,
   type DocketSubscription, type InsertDocketSubscription,
   type Notification, type InsertNotification,
   type DraftTemplate, type InsertDraftTemplate,
   type SavedDraft, type InsertSavedDraft,
+  type DocketDocument, type InsertDocketDocument,
 } from "@shared/schema";
 import { users, type User } from "@shared/models/auth";
 import { db } from "./db";
@@ -73,6 +74,11 @@ export interface IStorage {
 
   getSavedDrafts(userId: string): Promise<SavedDraft[]>;
   createSavedDraft(draft: InsertSavedDraft): Promise<SavedDraft>;
+
+  createDocketDocument(doc: InsertDocketDocument): Promise<DocketDocument>;
+  getDocketDocuments(docketId: number): Promise<DocketDocument[]>;
+  getDocketDocument(id: number): Promise<DocketDocument | undefined>;
+  deleteDocketDocument(id: number): Promise<DocketDocument | undefined>;
 
   getSubscribersForDocket(docketId: number): Promise<User[]>;
   getUsersByRole(role: string): Promise<User[]>;
@@ -273,6 +279,30 @@ export class DatabaseStorage implements IStorage {
   async createSavedDraft(draft: InsertSavedDraft): Promise<SavedDraft> {
     const [created] = await db.insert(savedDrafts).values(draft).returning();
     return created;
+  }
+
+  async createDocketDocument(doc: InsertDocketDocument): Promise<DocketDocument> {
+    const [created] = await db.insert(docketDocuments).values(doc).returning();
+    return created;
+  }
+
+  async getDocketDocuments(docketId: number): Promise<DocketDocument[]> {
+    return db.select().from(docketDocuments)
+      .where(eq(docketDocuments.docketId, docketId))
+      .orderBy(desc(docketDocuments.createdAt));
+  }
+
+  async getDocketDocument(id: number): Promise<DocketDocument | undefined> {
+    const [doc] = await db.select().from(docketDocuments)
+      .where(eq(docketDocuments.id, id));
+    return doc;
+  }
+
+  async deleteDocketDocument(id: number): Promise<DocketDocument | undefined> {
+    const [deleted] = await db.delete(docketDocuments)
+      .where(eq(docketDocuments.id, id))
+      .returning();
+    return deleted;
   }
 
   async getSubscribersForDocket(docketId: number): Promise<User[]> {

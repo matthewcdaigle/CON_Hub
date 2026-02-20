@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, Link, useLocation } from "wouter";
 import { Card } from "@/components/ui/card";
@@ -6,6 +6,23 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -29,14 +46,33 @@ import {
   DollarSign,
   Pencil,
   Trash2,
+  FileText,
+  Upload,
+  Download,
+  Loader2,
+  File,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { statusColors, formatStatus } from "@/lib/docket-utils";
 import { DocketFormDialog } from "@/components/docket-form-dialog";
-import type { Docket, DocketEvent, DocketSubscription } from "@shared/schema";
+import type { Docket, DocketEvent, DocketSubscription, DocketDocument } from "@shared/schema";
 import { format } from "date-fns";
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+const documentTypeLabels: Record<string, string> = {
+  application: "Application",
+  order: "Order",
+  notice: "Notice",
+  correspondence: "Correspondence",
+  other: "Other",
+};
 
 const eventTypeIcons: Record<string, string> = {
   filing: "Filed",
@@ -57,6 +93,8 @@ export default function DocketDetail() {
   const [, navigate] = useLocation();
   const [showEditForm, setShowEditForm] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showUploadDialog, setShowUploadDialog] = useState(false);
+  const [deleteDocId, setDeleteDocId] = useState<number | null>(null);
 
   const { data: docket, isLoading } = useQuery<Docket>({
     queryKey: ["/api/dockets", docketId],
@@ -72,6 +110,48 @@ export default function DocketDetail() {
   });
 
   const isSubscribed = subscriptions?.some((s) => s.docketId === docketId);
+
+  const { data: documents, isLoading: documentsLoading } = useQuery<DocketDocument[]>({
+    queryKey: ["/api/dockets", docketId, "documents"],
+    enabled: !!user,
+  });
+
+  const uploadMutation = useMutation({
+    mutationFn: async (formData: FormData) => {
+      const res = await fetch(`/api/dockets/${docketId}/documents`, {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ message: res.statusText }));
+        throw new Error(body.message || "Upload failed");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/dockets", docketId, "documents"] });
+      toast({ title: "Document Uploaded", description: "The file has been uploaded successfully." });
+      setShowUploadDialog(false);
+    },
+    onError: (error: Error) => {
+      toast({ title: "Upload Failed", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const deleteDocMutation = useMutation({
+    mutationFn: async (docId: number) => {
+      await apiRequest("DELETE", `/api/documents/${docId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/dockets", docketId, "documents"] });
+      toast({ title: "Document Deleted", description: "The document has been removed." });
+      setDeleteDocId(null);
+    },
+    onError: (error: Error) => {
+      toast({ title: "Delete Failed", description: error.message, variant: "destructive" });
+    },
+  });
 
   const subscribeMutation = useMutation({
     mutationFn: async () => {
@@ -376,6 +456,209 @@ export default function DocketDetail() {
           </Card>
         </div>
       </div>
+
+      {/* Documents Section */}
+      <Card className="p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-serif font-semibold text-lg">Documents</h2>
+          {user?.role === "admin" && (
+            <Button size="sm" onClick={() => setShowUploadDialog(true)}>
+              <Upload className="w-4 h-4 mr-2" />
+              Upload
+            </Button>
+          )}
+        </div>
+        <Separator className="mb-4" />
+        {documentsLoading ? (
+          <div className="space-y-3">
+            {[1, 2].map((i) => (
+              <div key={i} className="flex items-center gap-3">
+                <Skeleton className="w-8 h-8 rounded" />
+                <div className="flex-1 space-y-1">
+                  <Skeleton className="h-4 w-1/3" />
+                  <Skeleton className="h-3 w-1/4" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : !documents || documents.length === 0 ? (
+          <div className="text-center py-6">
+            <FileText className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+            <p className="text-sm text-muted-foreground">No documents uploaded yet.</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {documents.map((doc) => (
+              <div
+                key={doc.id}
+                className="flex items-center gap-3 p-3 rounded-lg border bg-card hover:bg-accent/50 transition-colors"
+              >
+                <File className="w-8 h-8 text-muted-foreground shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate">{doc.filename}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {documentTypeLabels[doc.documentType] || doc.documentType}
+                    {" \u00b7 "}
+                    {formatFileSize(doc.fileSize)}
+                    {" \u00b7 "}
+                    {format(new Date(doc.createdAt), "MMM d, yyyy")}
+                  </p>
+                  {doc.description && (
+                    <p className="text-xs text-muted-foreground mt-0.5 truncate">{doc.description}</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <a href={`/api/documents/${doc.id}/download`} download>
+                    <Button variant="ghost" size="icon" title="Download">
+                      <Download className="w-4 h-4" />
+                    </Button>
+                  </a>
+                  {user?.role === "admin" && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="text-destructive hover:text-destructive"
+                      title="Delete"
+                      onClick={() => setDeleteDocId(doc.id)}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {/* Upload Dialog */}
+      <UploadDialog
+        open={showUploadDialog}
+        onOpenChange={setShowUploadDialog}
+        onUpload={(formData) => uploadMutation.mutate(formData)}
+        isPending={uploadMutation.isPending}
+      />
+
+      {/* Delete Document Confirmation */}
+      <AlertDialog open={deleteDocId !== null} onOpenChange={(open) => { if (!open) setDeleteDocId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Document</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this document? This will permanently remove the file.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => deleteDocId && deleteDocMutation.mutate(deleteDocId)}
+              disabled={deleteDocMutation.isPending}
+            >
+              {deleteDocMutation.isPending ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
+  );
+}
+
+// ── Upload Dialog Component ─────────────────────────────────
+
+function UploadDialog({
+  open,
+  onOpenChange,
+  onUpload,
+  isPending,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onUpload: (formData: FormData) => void;
+  isPending: boolean;
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [documentType, setDocumentType] = useState("other");
+  const [description, setDescription] = useState("");
+
+  const handleOpenChange = (isOpen: boolean) => {
+    if (!isOpen) {
+      setSelectedFile(null);
+      setDocumentType("other");
+      setDescription("");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+    onOpenChange(isOpen);
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedFile) return;
+    const formData = new FormData();
+    formData.append("file", selectedFile);
+    formData.append("documentType", documentType);
+    if (description) formData.append("description", description);
+    onUpload(formData);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Upload Document</DialogTitle>
+          <DialogDescription>
+            Accepted formats: PDF, Word (.docx), Excel (.xlsx), plain text. Max 50 MB.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="file">File</Label>
+            <Input
+              ref={fileInputRef}
+              id="file"
+              type="file"
+              accept=".pdf,.docx,.xlsx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain"
+              onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+              required
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="documentType">Document Type</Label>
+            <Select value={documentType} onValueChange={setDocumentType}>
+              <SelectTrigger id="documentType">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="application">Application</SelectItem>
+                <SelectItem value="order">Order</SelectItem>
+                <SelectItem value="notice">Notice</SelectItem>
+                <SelectItem value="correspondence">Correspondence</SelectItem>
+                <SelectItem value="other">Other</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="description">Description (optional)</Label>
+            <Textarea
+              id="description"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Brief description of the document..."
+              rows={2}
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="outline" onClick={() => handleOpenChange(false)} disabled={isPending}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={isPending || !selectedFile}>
+              {isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Upload
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

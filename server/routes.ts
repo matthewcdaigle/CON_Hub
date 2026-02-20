@@ -9,6 +9,10 @@ import {
   insertDocketEventSchema,
 } from "@shared/schema";
 import OpenAI from "openai";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
+import crypto from "crypto";
 
 // Lazy OpenAI initialization — fails at call time with a clear message
 // rather than silently creating a broken client at import time
@@ -103,6 +107,43 @@ const createDocketEventBody = z.object({
 function formatStatus(status: string): string {
   return status.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
 }
+
+// ── File upload config ────────────────────────────────────
+
+const UPLOADS_DIR = path.resolve(process.cwd(), "uploads");
+fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+
+const ALLOWED_MIME_TYPES = new Set([
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "text/plain",
+]);
+
+const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination(_req, _file, cb) {
+      cb(null, UPLOADS_DIR);
+    },
+    filename(_req, file, cb) {
+      const unique = crypto.randomUUID();
+      const safeOriginal = file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
+      cb(null, `${unique}-${safeOriginal}`);
+    },
+  }),
+  limits: { fileSize: MAX_FILE_SIZE },
+  fileFilter(_req, file, cb) {
+    if (ALLOWED_MIME_TYPES.has(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Invalid file type. Accepted: PDF, Word (.docx), Excel (.xlsx), and plain text."));
+    }
+  },
+});
+
+const documentTypes = ["application", "order", "notice", "correspondence", "other"] as const;
 
 export async function registerRoutes(
   httpServer: Server,
@@ -310,6 +351,125 @@ export async function registerRoutes(
       }
       console.error("Error deleting docket:", error);
       res.status(500).json({ message: "Failed to delete docket" });
+    }
+  });
+
+  // ── Docket Documents ─────────────────────────────────────
+
+  app.get("/api/dockets/:id/documents", isAuthenticated, async (req: any, res) => {
+    try {
+      const docketId = parseId(req.params.id);
+      if (!docketId) return res.status(400).json({ message: "Invalid docket ID" });
+      const docs = await storage.getDocketDocuments(docketId);
+      res.json(docs);
+    } catch (error) {
+      console.error("Error fetching docket documents:", error);
+      res.status(500).json({ message: "Failed to fetch documents" });
+    }
+  });
+
+  app.post("/api/dockets/:id/documents", isAuthenticated, requireAdmin, (req: any, res) => {
+    const singleUpload = upload.single("file");
+    singleUpload(req, res, async (err: any) => {
+      if (err instanceof multer.MulterError) {
+        if (err.code === "LIMIT_FILE_SIZE") {
+          return res.status(400).json({ message: "File too large. Maximum size is 50 MB." });
+        }
+        return res.status(400).json({ message: err.message });
+      }
+      if (err) {
+        return res.status(400).json({ message: err.message });
+      }
+
+      try {
+        const docketId = parseId(req.params.id);
+        if (!docketId) return res.status(400).json({ message: "Invalid docket ID" });
+
+        const file = req.file;
+        if (!file) return res.status(400).json({ message: "No file uploaded" });
+
+        const docket = await storage.getDocket(docketId);
+        if (!docket) {
+          fs.unlink(file.path, () => {});
+          return res.status(404).json({ message: "Docket not found" });
+        }
+
+        const documentType = req.body.documentType || "other";
+        if (!documentTypes.includes(documentType)) {
+          fs.unlink(file.path, () => {});
+          return res.status(400).json({ message: `Invalid document type. Accepted: ${documentTypes.join(", ")}` });
+        }
+
+        // Move file into docket subdirectory
+        const docketDir = path.join(UPLOADS_DIR, String(docketId));
+        fs.mkdirSync(docketDir, { recursive: true });
+        const finalPath = path.join(docketDir, file.filename);
+        fs.renameSync(file.path, finalPath);
+
+        const storageKey = `uploads/${docketId}/${file.filename}`;
+        const doc = await storage.createDocketDocument({
+          docketId,
+          uploadedBy: req.user.claims.sub,
+          filename: file.originalname,
+          storageKey,
+          mimeType: file.mimetype,
+          fileSize: file.size,
+          documentType,
+          description: req.body.description || null,
+        });
+
+        res.status(201).json(doc);
+      } catch (error) {
+        if (req.file) fs.unlink(req.file.path, () => {});
+        console.error("Error uploading document:", error);
+        res.status(500).json({ message: "Failed to upload document" });
+      }
+    });
+  });
+
+  app.get("/api/documents/:id/download", isAuthenticated, async (req: any, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (!id) return res.status(400).json({ message: "Invalid document ID" });
+      const doc = await storage.getDocketDocument(id);
+      if (!doc) return res.status(404).json({ message: "Document not found" });
+
+      const filePath = path.resolve(process.cwd(), doc.storageKey);
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ message: "File not found on disk" });
+      }
+
+      res.setHeader("Content-Type", doc.mimeType);
+      res.setHeader("Content-Disposition", `attachment; filename="${doc.filename.replace(/"/g, '\\"')}"`);
+      res.setHeader("Content-Length", doc.fileSize);
+      fs.createReadStream(filePath).pipe(res);
+    } catch (error) {
+      console.error("Error downloading document:", error);
+      res.status(500).json({ message: "Failed to download document" });
+    }
+  });
+
+  app.delete("/api/documents/:id", isAuthenticated, requireAdmin, async (req: any, res) => {
+    try {
+      const id = parseId(req.params.id);
+      if (!id) return res.status(400).json({ message: "Invalid document ID" });
+
+      const doc = await storage.getDocketDocument(id);
+      if (!doc) return res.status(404).json({ message: "Document not found" });
+
+      const deleted = await storage.deleteDocketDocument(id);
+      if (!deleted) return res.status(404).json({ message: "Document not found" });
+
+      // Remove file from disk (best-effort)
+      const filePath = path.resolve(process.cwd(), doc.storageKey);
+      fs.unlink(filePath, (err) => {
+        if (err) console.error("Failed to delete file from disk:", err);
+      });
+
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting document:", error);
+      res.status(500).json({ message: "Failed to delete document" });
     }
   });
 
