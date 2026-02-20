@@ -14,6 +14,12 @@ function buildDocUrl(entryId: number): string {
   return `${BASE_URL}/DocView.aspx?id=${entryId}&dbid=1&repo=HealthPlanning`;
 }
 
+/**
+ * Entry type constants from the WebLink API.
+ * type 0 = Folder, type 1 = Document (edoc/non-edoc).
+ */
+const ENTRY_TYPE_FOLDER = 0;
+
 /** Raw entry from the WebLink API response.data.results[] */
 interface RawEntry {
   entryId: number;
@@ -21,8 +27,9 @@ interface RawEntry {
   type: number;
   isEdoc: boolean;
   thumbnailPageCount?: number;
-  lastModified?: string;
   extension?: string;
+  entryProperties?: Record<string, any>;
+  metadata?: Record<string, any>;
   [key: string]: any;
 }
 
@@ -120,8 +127,11 @@ export class Crawler {
       const validCount = Math.min(results.length, total - start);
       const validResults = results.slice(0, validCount);
 
+      const folderCount = validResults.filter((e) => e.type === ENTRY_TYPE_FOLDER).length;
+      const docCount = validResults.length - folderCount;
       console.log(
-        `  Folder ${folderId} [${path}]: ${validResults.length} entries (${start}-${start + validResults.length} of ${totalEntries})`
+        `  Folder ${folderId} [${path}]: ${validResults.length} entries (${folderCount} folders, ${docCount} documents) `
+        + `[${start}-${start + validResults.length} of ${totalEntries}]`
       );
 
       for (const entry of validResults) {
@@ -132,25 +142,53 @@ export class Crawler {
     } while (start < totalEntries);
   }
 
+  /**
+   * Extract a last-modified date from the entry.  The API does not provide a
+   * top-level `lastModified` field; the value lives inside `entryProperties`
+   * or `metadata`.  We try several common locations and fall back to "".
+   */
+  private static extractLastModified(entry: RawEntry): string {
+    // Direct field (in case future API versions add it)
+    if (entry.lastModified) return String(entry.lastModified);
+
+    // entryProperties often contains { lastModifiedDate, modifyDate, ... }
+    const ep = entry.entryProperties;
+    if (ep) {
+      const candidate =
+        ep["lastModifiedDate"] ?? ep["modifyDate"] ?? ep["LastModifiedDate"] ?? ep["ModifyDate"];
+      if (candidate) return String(candidate);
+    }
+
+    // metadata bag
+    const md = entry.metadata;
+    if (md) {
+      const candidate =
+        md["lastModifiedDate"] ?? md["modifyDate"] ?? md["LastModifiedDate"] ?? md["ModifyDate"];
+      if (candidate) return String(candidate);
+    }
+
+    return "";
+  }
+
   private async processEntry(
     entry: RawEntry,
     parentPath: string
   ): Promise<void> {
-    if (entry.isEdoc) {
-      // Document
+    if (entry.type === ENTRY_TYPE_FOLDER) {
+      // Folder -- recurse into it
+      const folderPath = `${parentPath}/${entry.name}`;
+      await this.crawlFolder(entry.entryId, folderPath);
+    } else {
+      // Any non-folder entry is treated as a document (edoc or regular file).
       const doc: CrawledDocument = {
         entryId: entry.entryId,
         name: entry.name,
         path: parentPath,
-        lastModified: entry.lastModified ?? "",
+        lastModified: Crawler.extractLastModified(entry),
         pageCount: entry.thumbnailPageCount ?? 0,
         url: buildDocUrl(entry.entryId),
       };
       this.documents.push(doc);
-    } else if (entry.type === 0) {
-      // Folder — recurse
-      const folderPath = `${parentPath}/${entry.name}`;
-      await this.crawlFolder(entry.entryId, folderPath);
     }
   }
 }
