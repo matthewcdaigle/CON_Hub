@@ -5,18 +5,37 @@ import { z } from "zod";
 
 export * from "./models/auth";
 export * from "./models/chat";
+import { users } from "./models/auth";
 
 export const docketStatusEnum = pgEnum("docket_status", [
-  "pre_filing",
+  "loi_filed",
+  "loi_expired",
+  "loi_converted",
   "filed",
   "under_review",
-  "hearing_scheduled",
-  "hearing_complete",
-  "decision_pending",
+  "desk_determination_issued",
+  "appeal_hearing_officer_pending",
+  "appeal_hearing_officer_decided",
+  "appeal_con_panel_pending",
+  "appeal_con_panel_decided",
+  "appeal_superior_court_pending",
+  "appeal_superior_court_decided",
+  "appeal_court_of_appeals_pending",
+  "appeal_court_of_appeals_decided",
+  "appeal_supreme_court_pending",
+  "appeal_supreme_court_decided",
   "approved",
   "denied",
   "withdrawn",
-  "appealed",
+  "closed",
+]);
+
+export const docketTypeEnum = pgEnum("docket_type", [
+  "loi",
+  "con",
+  "det",
+  "det_eqt",
+  "det_asc",
 ]);
 
 export const dockets = pgTable("dockets", {
@@ -27,13 +46,18 @@ export const dockets = pgTable("dockets", {
   facilityName: text("facility_name").notNull(),
   facilityType: text("facility_type").notNull(),
   county: text("county").notNull(),
+  docketType: docketTypeEnum("docket_type").notNull(),
   status: docketStatusEnum("status").notNull().default("filed"),
+  parentDocketId: integer("parent_docket_id").references((): any => dockets.id, { onDelete: "set null" }),
   filingDate: timestamp("filing_date").notNull(),
   hearingDate: timestamp("hearing_date"),
   decisionDate: timestamp("decision_date"),
   description: text("description"),
   estimatedCost: text("estimated_cost"),
   laserficheUrl: text("laserfiche_url"),
+  equipmentType: text("equipment_type"),
+  bedCount: integer("bed_count"),
+  serviceType: text("service_type"),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
   updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 }, (table) => [
@@ -92,6 +116,21 @@ export const notifications = pgTable("notifications", {
   index("notifications_user_read_idx").on(table.userId, table.read),
 ]);
 
+export const docketDocuments = pgTable("docket_documents", {
+  id: serial("id").primaryKey(),
+  docketId: integer("docket_id").notNull().references(() => dockets.id, { onDelete: "cascade" }),
+  uploadedBy: varchar("uploaded_by").references(() => users.id, { onDelete: "set null" }),
+  filename: text("filename").notNull(),
+  storageKey: text("storage_key").notNull(),
+  mimeType: text("mime_type").notNull(),
+  fileSize: integer("file_size").notNull(),
+  documentType: text("document_type").notNull(),
+  description: text("description"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+}, (table) => [
+  index("docket_documents_docket_id_idx").on(table.docketId),
+]);
+
 export const draftTemplates = pgTable("draft_templates", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
@@ -130,6 +169,7 @@ export const docketsRelations = relations(dockets, ({ many, one }) => ({
   subscriptions: many(docketSubscriptions),
   documents: many(researchDocuments),
   caseBrief: one(caseBriefs, { fields: [dockets.id], references: [caseBriefs.docketId] }),
+  uploadedDocuments: many(docketDocuments),
 }));
 
 export const caseBriefsRelations = relations(caseBriefs, ({ one }) => ({
@@ -146,6 +186,10 @@ export const researchDocumentsRelations = relations(researchDocuments, ({ one })
 
 export const docketSubscriptionsRelations = relations(docketSubscriptions, ({ one }) => ({
   docket: one(dockets, { fields: [docketSubscriptions.docketId], references: [dockets.id] }),
+}));
+
+export const docketDocumentsRelations = relations(docketDocuments, ({ one }) => ({
+  docket: one(dockets, { fields: [docketDocuments.docketId], references: [dockets.id] }),
 }));
 
 export const insertDocketSchema = createInsertSchema(dockets).omit({
@@ -174,6 +218,11 @@ export const insertNotificationSchema = createInsertSchema(notifications).omit({
   createdAt: true,
 });
 
+export const insertDocketDocumentSchema = createInsertSchema(docketDocuments).omit({
+  id: true,
+  createdAt: true,
+});
+
 export const insertDraftTemplateSchema = createInsertSchema(draftTemplates).omit({
   id: true,
   createdAt: true,
@@ -195,6 +244,8 @@ export type DocketSubscription = typeof docketSubscriptions.$inferSelect;
 export type InsertDocketSubscription = z.infer<typeof insertDocketSubscriptionSchema>;
 export type Notification = typeof notifications.$inferSelect;
 export type InsertNotification = z.infer<typeof insertNotificationSchema>;
+export type DocketDocument = typeof docketDocuments.$inferSelect;
+export type InsertDocketDocument = z.infer<typeof insertDocketDocumentSchema>;
 export type DraftTemplate = typeof draftTemplates.$inferSelect;
 export type InsertDraftTemplate = z.infer<typeof insertDraftTemplateSchema>;
 export type SavedDraft = typeof savedDrafts.$inferSelect;
