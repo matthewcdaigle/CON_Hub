@@ -9,16 +9,21 @@ import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { useAuth } from "@/hooks/use-auth";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ErrorBoundary } from "@/components/error-boundary";
 import Landing from "@/pages/landing";
 import Dashboard from "@/pages/dashboard";
-import Dockets from "@/pages/dockets";
-import DocketDetail from "@/pages/docket-detail";
+import Proceedings from "@/pages/proceedings";
+import ProceedingDetail from "@/pages/proceeding-detail";
+import Clients from "@/pages/clients";
+import ClientDetail from "@/pages/client-detail";
+import Deadlines from "@/pages/deadlines";
 import Research from "@/pages/research";
 import Drafting from "@/pages/drafting";
 import Alerts from "@/pages/alerts";
 import CaseBriefs from "@/pages/case-briefs";
+import Settings from "@/pages/settings";
+import Admin from "@/pages/admin";
 import NotFound from "@/pages/not-found";
-import { ErrorBoundary } from "@/components/error-boundary";
 
 function AuthenticatedLayout() {
   const style = {
@@ -32,19 +37,24 @@ function AuthenticatedLayout() {
         <AppSidebar />
         <div className="flex flex-col flex-1 min-w-0">
           <header className="sticky top-0 z-40 flex items-center justify-between gap-4 p-2 border-b bg-background/80 backdrop-blur-md">
-            <SidebarTrigger data-testid="button-sidebar-toggle" />
+            <SidebarTrigger />
             <ThemeToggle />
           </header>
           <main className="flex-1 overflow-auto">
             <ErrorBoundary>
               <Switch>
                 <Route path="/" component={Dashboard} />
-                <Route path="/dockets" component={Dockets} />
-                <Route path="/dockets/:id" component={DocketDetail} />
+                <Route path="/proceedings" component={Proceedings} />
+                <Route path="/proceedings/:id" component={ProceedingDetail} />
+                <Route path="/clients" component={Clients} />
+                <Route path="/clients/:id" component={ClientDetail} />
+                <Route path="/deadlines" component={Deadlines} />
                 <Route path="/case-briefs" component={CaseBriefs} />
                 <Route path="/research" component={Research} />
                 <Route path="/drafting" component={Drafting} />
                 <Route path="/alerts" component={Alerts} />
+                <Route path="/settings" component={Settings} />
+                <Route path="/admin" component={Admin} />
                 <Route component={NotFound} />
               </Switch>
             </ErrorBoundary>

@@ -65,6 +65,27 @@ app.use((req, res, next) => {
   const { seedDatabase } = await import("./seed");
   await seedDatabase().catch(console.error);
 
+  // Start background jobs
+  try {
+    const cron = await import("node-cron");
+    const { checkDeadlines } = await import("./jobs/deadline-checker");
+    const { sendDailyDigest } = await import("./jobs/email-digest");
+
+    // Check deadlines every hour
+    cron.default.schedule("0 * * * *", () => {
+      checkDeadlines().catch((err) => console.error("Deadline check failed:", err));
+    });
+
+    // Send daily email digest at 8am
+    cron.default.schedule("0 8 * * *", () => {
+      sendDailyDigest().catch((err) => console.error("Email digest failed:", err));
+    });
+
+    log("Background jobs scheduled", "cron");
+  } catch (err) {
+    console.error("Failed to setup background jobs:", err);
+  }
+
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";

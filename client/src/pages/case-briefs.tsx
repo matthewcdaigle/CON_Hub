@@ -13,72 +13,57 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Search, BookOpen, Scale, Calendar, Building2, ArrowRight, Gavel, AlertTriangle, FileCheck } from "lucide-react";
-import type { CaseBrief, Docket } from "@shared/schema";
+import type { CaseBrief, Proceeding } from "@shared/schema";
 import { format } from "date-fns";
-
-const statusColors: Record<string, string> = {
-  pre_filing: "bg-muted text-muted-foreground",
-  filed: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300",
-  under_review: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300",
-  hearing_scheduled: "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300",
-  hearing_complete: "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300",
-  decision_pending: "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300",
-  approved: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300",
-  denied: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300",
-  withdrawn: "bg-gray-100 text-gray-800 dark:bg-gray-800/30 dark:text-gray-300",
-  appealed: "bg-pink-100 text-pink-800 dark:bg-pink-900/30 dark:text-pink-300",
-};
-
-function formatStatus(status: string) {
-  return status.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
-}
+import { statusColors, formatStatus } from "@/lib/proceeding-utils";
 
 export default function CaseBriefs() {
   const [search, setSearch] = useState("");
   const [selectedBrief, setSelectedBrief] = useState<CaseBrief | null>(null);
-  const [selectedDocket, setSelectedDocket] = useState<Docket | null>(null);
+  const [selectedProceeding, setSelectedProceeding] = useState<Proceeding | null>(null);
 
   const { data: briefs, isLoading: briefsLoading } = useQuery<CaseBrief[]>({
     queryKey: ["/api/case-briefs"],
   });
 
-  const { data: docketsResult, isLoading: docketsLoading } = useQuery<{ data: Docket[] } | Docket[]>({
-    queryKey: ["/api/dockets"],
+  const { data: proceedingsResult, isLoading: proceedingsLoading } = useQuery<{ data: Proceeding[] } | Proceeding[]>({
+    queryKey: ["/api/proceedings"],
+    queryFn: () => fetch("/api/proceedings").then((r) => r.json()),
   });
 
-  const dockets = Array.isArray(docketsResult) ? docketsResult : docketsResult?.data || [];
+  const proceedingsList = Array.isArray(proceedingsResult) ? proceedingsResult : proceedingsResult?.data || [];
 
-  const getDocket = (docketId: number) => dockets.find((d) => d.id === docketId);
+  const getProceeding = (proceedingId: number) => proceedingsList.find((d) => d.id === proceedingId);
 
   const filtered = (briefs || []).filter((brief) => {
     if (!search) return true;
-    const docket = getDocket(brief.docketId);
+    const proc = getProceeding(brief.proceedingId);
     const searchLower = search.toLowerCase();
     return (
       brief.summary.toLowerCase().includes(searchLower) ||
       brief.decisionIssues.toLowerCase().includes(searchLower) ||
       brief.appellateIssues.toLowerCase().includes(searchLower) ||
       brief.judicialReview.toLowerCase().includes(searchLower) ||
-      docket?.title.toLowerCase().includes(searchLower) ||
-      docket?.caseNumber.toLowerCase().includes(searchLower) ||
-      docket?.applicant.toLowerCase().includes(searchLower) ||
-      docket?.county.toLowerCase().includes(searchLower)
+      proc?.title.toLowerCase().includes(searchLower) ||
+      proc?.caseNumber.toLowerCase().includes(searchLower) ||
+      proc?.applicant.toLowerCase().includes(searchLower) ||
+      proc?.county.toLowerCase().includes(searchLower)
     );
   });
 
   const openBrief = (brief: CaseBrief) => {
     setSelectedBrief(brief);
-    setSelectedDocket(getDocket(brief.docketId) || null);
+    setSelectedProceeding(getProceeding(brief.proceedingId) || null);
   };
 
-  const isLoading = briefsLoading || docketsLoading;
+  const isLoading = briefsLoading || proceedingsLoading;
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
       <div className="space-y-1">
         <h1 className="font-serif text-2xl font-bold" data-testid="text-case-briefs-title">Case Briefs</h1>
         <p className="text-muted-foreground text-sm">
-          Structured legal analysis for each CON docket covering decision-level issues, appellate issues, and judicial review.
+          Structured legal analysis for each CON proceeding covering decision-level issues, appellate issues, and judicial review.
         </p>
       </div>
 
@@ -117,13 +102,13 @@ export default function CaseBriefs() {
           <p className="text-sm text-muted-foreground">
             {search
               ? "Try adjusting your search terms."
-              : "Generate case briefs from individual docket pages to build your research database."}
+              : "Generate case briefs from individual proceeding pages to build your research database."}
           </p>
         </Card>
       ) : (
         <div className="space-y-4">
           {filtered.map((brief) => {
-            const docket = getDocket(brief.docketId);
+            const proc = getProceeding(brief.proceedingId);
             return (
               <Card
                 key={brief.id}
@@ -134,23 +119,23 @@ export default function CaseBriefs() {
                 <div className="flex items-start justify-between gap-4">
                   <div className="space-y-2 min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="font-medium">{docket?.title || `Docket #${brief.docketId}`}</h3>
-                      {docket && (
-                        <Badge className={statusColors[docket.status] || ""}>
-                          {formatStatus(docket.status)}
+                      <h3 className="font-medium">{proc?.title || `Proceeding #${brief.proceedingId}`}</h3>
+                      {proc && (
+                        <Badge className={statusColors[proc.status] || ""}>
+                          {formatStatus(proc.status)}
                         </Badge>
                       )}
                     </div>
-                    {docket && (
+                    {proc && (
                       <div className="flex items-center gap-4 text-sm text-muted-foreground flex-wrap">
-                        <span className="font-mono text-xs">{docket.caseNumber}</span>
+                        <span className="font-mono text-xs">{proc.caseNumber}</span>
                         <span className="flex items-center gap-1">
                           <Building2 className="w-3.5 h-3.5" />
-                          {docket.applicant}
+                          {proc.applicant}
                         </span>
                         <span className="flex items-center gap-1">
                           <Calendar className="w-3.5 h-3.5" />
-                          {format(new Date(docket.filingDate), "MMM d, yyyy")}
+                          {format(new Date(proc.filingDate), "MMM d, yyyy")}
                         </span>
                       </div>
                     )}
@@ -181,22 +166,22 @@ export default function CaseBriefs() {
         </div>
       )}
 
-      <Dialog open={!!selectedBrief} onOpenChange={() => { setSelectedBrief(null); setSelectedDocket(null); }}>
+      <Dialog open={!!selectedBrief} onOpenChange={() => { setSelectedBrief(null); setSelectedProceeding(null); }}>
         <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
           {selectedBrief && (
             <>
               <DialogHeader>
                 <DialogTitle className="font-serif text-xl">
-                  {selectedDocket?.title || `Docket #${selectedBrief.docketId}`}
+                  {selectedProceeding?.title || `Proceeding #${selectedBrief.proceedingId}`}
                 </DialogTitle>
-                {selectedDocket && (
+                {selectedProceeding && (
                   <div className="flex items-center gap-3 text-sm text-muted-foreground flex-wrap">
-                    <span className="font-mono">{selectedDocket.caseNumber}</span>
-                    <Badge className={statusColors[selectedDocket.status] || ""}>
-                      {formatStatus(selectedDocket.status)}
+                    <span className="font-mono">{selectedProceeding.caseNumber}</span>
+                    <Badge className={statusColors[selectedProceeding.status] || ""}>
+                      {formatStatus(selectedProceeding.status)}
                     </Badge>
-                    <span>{selectedDocket.applicant}</span>
-                    <span>{selectedDocket.county} County</span>
+                    <span>{selectedProceeding.applicant}</span>
+                    <span>{selectedProceeding.county} County</span>
                   </div>
                 )}
               </DialogHeader>

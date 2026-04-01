@@ -25,13 +25,13 @@ import { FileText, Sparkles, Save, Loader2, Copy, Check, BookOpen } from "lucide
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { DraftTemplate, SavedDraft, Docket } from "@shared/schema";
+import type { DraftTemplate, SavedDraft, Proceeding } from "@shared/schema";
 
 export default function Drafting() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [selectedTemplate, setSelectedTemplate] = useState<string>("");
-  const [selectedDocket, setSelectedDocket] = useState<string>("");
+  const [selectedProceeding, setSelectedProceeding] = useState<string>("");
   const [draftTitle, setDraftTitle] = useState("");
   const [draftContent, setDraftContent] = useState("");
   const [aiPrompt, setAiPrompt] = useState("");
@@ -43,11 +43,11 @@ export default function Drafting() {
     queryKey: ["/api/templates"],
   });
 
-  const { data: docketsResponse } = useQuery<{ data: Docket[]; total: number }>({
-    queryKey: ["/api/dockets"],
+  const { data: proceedingsResponse } = useQuery<{ data: Proceeding[]; total: number }>({
+    queryKey: ["/api/proceedings"],
   });
 
-  const dockets = docketsResponse?.data;
+  const proceedingsList = proceedingsResponse?.data;
 
   const { data: savedDrafts, isLoading: draftsLoading } = useQuery<SavedDraft[]>({
     queryKey: ["/api/drafts"],
@@ -60,7 +60,7 @@ export default function Drafting() {
         title: draftTitle || "Untitled Draft",
         content: draftContent,
         templateId: selectedTemplate ? parseInt(selectedTemplate) : null,
-        docketId: selectedDocket ? parseInt(selectedDocket) : null,
+        proceedingId: selectedProceeding ? parseInt(selectedProceeding) : null,
       });
     },
     onSuccess: () => {
@@ -93,7 +93,7 @@ export default function Drafting() {
         body: JSON.stringify({
           prompt: aiPrompt,
           templateId: selectedTemplate ? parseInt(selectedTemplate) : null,
-          docketId: selectedDocket ? parseInt(selectedDocket) : null,
+          proceedingId: selectedProceeding ? parseInt(selectedProceeding) : null,
           existingContent: draftContent,
         }),
       });
@@ -147,7 +147,7 @@ export default function Drafting() {
     setDraftTitle(draft.title);
     setDraftContent(draft.content);
     if (draft.templateId) setSelectedTemplate(String(draft.templateId));
-    if (draft.docketId) setSelectedDocket(String(draft.docketId));
+    if (draft.proceedingId) setSelectedProceeding(String(draft.proceedingId));
     setShowSavedDrafts(false);
   };
 
@@ -197,14 +197,14 @@ export default function Drafting() {
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs text-muted-foreground uppercase tracking-wider">Related Docket</label>
-                <Select value={selectedDocket} onValueChange={setSelectedDocket}>
+                <label className="text-xs text-muted-foreground uppercase tracking-wider">Related Proceeding</label>
+                <Select value={selectedProceeding} onValueChange={setSelectedProceeding}>
                   <SelectTrigger data-testid="select-docket">
-                    <SelectValue placeholder="Link to a docket (optional)" />
+                    <SelectValue placeholder="Link to a proceeding (optional)" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">None</SelectItem>
-                    {dockets?.map((d) => (
+                    {proceedingsList?.map((d) => (
                       <SelectItem key={d.id} value={String(d.id)}>
                         {d.caseNumber} - {d.title}
                       </SelectItem>

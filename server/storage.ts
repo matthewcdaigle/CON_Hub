@@ -1,366 +1,785 @@
 import {
-  dockets, docketEvents, researchDocuments, docketSubscriptions,
-  notifications, draftTemplates, savedDrafts, caseBriefs, docketDocuments,
-  type Docket, type InsertDocket, type DocketEvent, type InsertDocketEvent,
-  type ResearchDocument, type InsertResearchDocument,
-  type DocketSubscription, type InsertDocketSubscription,
-  type Notification, type InsertNotification,
-  type DraftTemplate, type InsertDraftTemplate,
-  type SavedDraft, type InsertSavedDraft,
-  type CaseBrief, type InsertCaseBrief,
-  type DocketDocument, type InsertDocketDocument,
-} from "@shared/schema";
-import { users, type User } from "@shared/models/auth";
+  eq,
+  and,
+  or,
+  desc,
+  asc,
+  ilike,
+  gt,
+  gte,
+  lte,
+  sql,
+  count,
+} from "drizzle-orm";
 import { db } from "./db";
-import { eq, desc, and, ilike, or, sql, count, inArray } from "drizzle-orm";
+import {
+  proceedings,
+  proceedingEvents,
+  proceedingDocuments,
+  clients,
+  clientProceedings,
+  proximityAlerts,
+  subscriptions,
+  notifications,
+  deadlines,
+  researchDocuments,
+  caseBriefs,
+  draftTemplates,
+  savedDrafts,
+  syncJobs,
+  teams,
+  type Proceeding,
+  type InsertProceeding,
+  type ProceedingEvent,
+  type InsertProceedingEvent,
+  type ProceedingDocument,
+  type InsertProceedingDocument,
+  type Client,
+  type InsertClient,
+  type ClientProceeding,
+  type InsertClientProceeding,
+  type ProximityAlert,
+  type Subscription,
+  type InsertSubscription,
+  type Notification,
+  type InsertNotification,
+  type Deadline,
+  type InsertDeadline,
+  type ResearchDocument,
+  type InsertResearchDocument,
+  type CaseBrief,
+  type InsertCaseBrief,
+  type DraftTemplate,
+  type SavedDraft,
+  type InsertSavedDraft,
+  type SyncJob,
+  type InsertSyncJob,
+  type Team,
+  type InsertTeam,
+} from "@shared/schema";
+import { users, type UpsertUser, type User } from "@shared/models/auth";
 
-export interface PaginationParams {
-  limit: number;
-  offset: number;
-}
+// ===================== OPTION TYPES =====================
 
-export interface PaginatedResult<T> {
-  data: T[];
-  total: number;
-  limit: number;
-  offset: number;
-}
-
-const DEFAULT_PAGE_LIMIT = 50;
-
-export interface DocketFilters {
-  search?: string;
+export interface ProceedingsOptions {
+  page?: number;
+  limit?: number;
+  type?: string;
   status?: string;
   county?: string;
+  search?: string;
+  dateFrom?: Date;
+  dateTo?: Date;
   facilityType?: string;
-  docketType?: string;
+}
+
+export interface NotificationsOptions {
   page?: number;
-  pageSize?: number;
+  limit?: number;
+  unreadOnly?: boolean;
 }
 
-export interface DocketListResult {
-  dockets: Docket[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
+export interface DeadlinesOptions {
+  proceedingId?: number;
+  dateFrom?: Date;
+  dateTo?: Date;
+  completed?: boolean;
 }
 
-export interface IStorage {
-  getDockets(filters?: DocketFilters): Promise<DocketListResult>;
-  getDocket(id: number): Promise<Docket | undefined>;
-  createDocket(docket: InsertDocket): Promise<Docket>;
-  updateDocket(id: number, data: Partial<InsertDocket>): Promise<Docket | undefined>;
-  deleteDocket(id: number): Promise<boolean>;
-
-  getDocketEvents(docketId: number): Promise<DocketEvent[]>;
-  createDocketEvent(event: InsertDocketEvent): Promise<DocketEvent>;
-
-  getResearchDocuments(pagination?: PaginationParams): Promise<PaginatedResult<ResearchDocument>>;
-  getResearchDocument(id: number): Promise<ResearchDocument | undefined>;
-  createResearchDocument(doc: InsertResearchDocument): Promise<ResearchDocument>;
-
-  getSubscriptions(userId: string): Promise<DocketSubscription[]>;
-  createSubscription(sub: InsertDocketSubscription): Promise<DocketSubscription>;
-  deleteSubscription(id: number, userId: string): Promise<boolean>;
-  getSubscriptionsByDocket(docketId: number): Promise<DocketSubscription[]>;
-
-  getNotifications(userId: string, pagination?: PaginationParams): Promise<PaginatedResult<Notification>>;
-  createNotification(notif: InsertNotification): Promise<Notification>;
-  markNotificationRead(id: number, userId: string): Promise<boolean>;
-  markAllNotificationsRead(userId: string): Promise<void>;
-
-  getTemplates(): Promise<DraftTemplate[]>;
-  getTemplate(id: number): Promise<DraftTemplate | undefined>;
-  createTemplate(template: InsertDraftTemplate): Promise<DraftTemplate>;
-
-  getSavedDrafts(userId: string): Promise<SavedDraft[]>;
-  createSavedDraft(draft: InsertSavedDraft): Promise<SavedDraft>;
-
-  getCaseBriefs(): Promise<CaseBrief[]>;
-  getCaseBriefByDocket(docketId: number): Promise<CaseBrief | undefined>;
-  createCaseBrief(brief: InsertCaseBrief): Promise<CaseBrief>;
-  updateCaseBrief(docketId: number, data: Partial<InsertCaseBrief>): Promise<CaseBrief | undefined>;
-
-  createDocketDocument(doc: InsertDocketDocument): Promise<DocketDocument>;
-  getDocketDocuments(docketId: number): Promise<DocketDocument[]>;
-  getDocketDocument(id: number): Promise<DocketDocument | undefined>;
-  deleteDocketDocument(id: number): Promise<DocketDocument | undefined>;
-
-  getSubscribersForDocket(docketId: number): Promise<User[]>;
-  getUsersByRole(role: string): Promise<User[]>;
+export interface ResearchDocumentsOptions {
+  page?: number;
+  limit?: number;
+  category?: string;
+  search?: string;
 }
 
-export class DatabaseStorage implements IStorage {
-  async getDockets(filters?: DocketFilters): Promise<DocketListResult> {
-    const page = Math.max(filters?.page ?? 1, 1);
-    const pageSize = Math.min(Math.max(filters?.pageSize ?? 20, 1), 100);
-    const offset = (page - 1) * pageSize;
+// ===================== DATABASE STORAGE CLASS =====================
+
+export class DatabaseStorage {
+  // =================== PROCEEDINGS ===================
+
+  async getProceedings(
+    options: ProceedingsOptions = {}
+  ): Promise<{ data: Proceeding[]; total: number }> {
+    const {
+      page = 1,
+      limit = 20,
+      type,
+      status,
+      county,
+      search,
+      dateFrom,
+      dateTo,
+      facilityType,
+    } = options;
+    const offset = (page - 1) * limit;
 
     const conditions = [];
 
-    if (filters?.search) {
-      const pattern = `%${filters.search}%`;
+    if (type) {
+      conditions.push(eq(proceedings.proceedingType, type as any));
+    }
+    if (status) {
+      conditions.push(eq(proceedings.status, status as any));
+    }
+    if (county) {
+      conditions.push(eq(proceedings.county, county));
+    }
+    if (facilityType) {
+      conditions.push(eq(proceedings.facilityType, facilityType));
+    }
+    if (search) {
       conditions.push(
         or(
-          ilike(dockets.caseNumber, pattern),
-          ilike(dockets.title, pattern),
-          ilike(dockets.applicant, pattern),
-          ilike(dockets.facilityName, pattern),
-          ilike(dockets.county, pattern),
-        )!,
+          ilike(proceedings.title, `%${search}%`),
+          ilike(proceedings.applicant, `%${search}%`),
+          ilike(proceedings.caseNumber, `%${search}%`),
+          ilike(proceedings.facilityName, `%${search}%`)
+        )!
       );
     }
-
-    if (filters?.status) {
-      conditions.push(eq(dockets.status, filters.status as typeof dockets.status.enumValues[number]));
+    if (dateFrom) {
+      conditions.push(gte(proceedings.filingDate, dateFrom));
     }
-
-    if (filters?.county) {
-      conditions.push(ilike(dockets.county, filters.county));
-    }
-
-    if (filters?.facilityType) {
-      conditions.push(ilike(dockets.facilityType, filters.facilityType));
-    }
-
-    if (filters?.docketType) {
-      conditions.push(eq(dockets.docketType, filters.docketType as typeof dockets.docketType.enumValues[number]));
+    if (dateTo) {
+      conditions.push(lte(proceedings.filingDate, dateTo));
     }
 
     const where = conditions.length > 0 ? and(...conditions) : undefined;
 
-    const [data, [{ total }]] = await Promise.all([
-      db.select().from(dockets)
+    const [data, totalResult] = await Promise.all([
+      db
+        .select()
+        .from(proceedings)
         .where(where)
-        .orderBy(desc(dockets.createdAt))
-        .limit(pageSize)
-        .offset(offset),
-      db.select({ total: count() }).from(dockets)
-        .where(where),
-    ]);
-
-    return {
-      dockets: data,
-      total,
-      page,
-      pageSize,
-      totalPages: Math.ceil(total / pageSize),
-    };
-  }
-
-  async getDocket(id: number): Promise<Docket | undefined> {
-    const [docket] = await db.select().from(dockets).where(eq(dockets.id, id));
-    return docket;
-  }
-
-  async createDocket(docket: InsertDocket): Promise<Docket> {
-    const [created] = await db.insert(dockets).values(docket).returning();
-    return created;
-  }
-
-  async updateDocket(id: number, data: Partial<InsertDocket>): Promise<Docket | undefined> {
-    const [updated] = await db.update(dockets)
-      .set({ ...data, updatedAt: new Date() })
-      .where(eq(dockets.id, id))
-      .returning();
-    return updated;
-  }
-
-  async deleteDocket(id: number): Promise<boolean> {
-    const result = await db.delete(dockets)
-      .where(eq(dockets.id, id))
-      .returning();
-    return result.length > 0;
-  }
-
-  async getDocketEvents(docketId: number): Promise<DocketEvent[]> {
-    return db.select().from(docketEvents)
-      .where(eq(docketEvents.docketId, docketId))
-      .orderBy(desc(docketEvents.eventDate));
-  }
-
-  async createDocketEvent(event: InsertDocketEvent): Promise<DocketEvent> {
-    const [created] = await db.insert(docketEvents).values(event).returning();
-    return created;
-  }
-
-  async getResearchDocuments(pagination?: PaginationParams): Promise<PaginatedResult<ResearchDocument>> {
-    const limit = pagination?.limit ?? DEFAULT_PAGE_LIMIT;
-    const offset = pagination?.offset ?? 0;
-
-    const [data, [{ total }]] = await Promise.all([
-      db.select().from(researchDocuments)
-        .orderBy(desc(researchDocuments.createdAt))
+        .orderBy(desc(proceedings.filingDate))
         .limit(limit)
         .offset(offset),
-      db.select({ total: count() }).from(researchDocuments),
+      db.select({ count: count() }).from(proceedings).where(where),
     ]);
 
-    return { data, total, limit, offset };
+    return { data, total: totalResult[0].count };
   }
 
-  async getResearchDocument(id: number): Promise<ResearchDocument | undefined> {
-    const [doc] = await db.select().from(researchDocuments).where(eq(researchDocuments.id, id));
-    return doc;
+  async getProceedingById(id: number): Promise<Proceeding | undefined> {
+    const [result] = await db
+      .select()
+      .from(proceedings)
+      .where(eq(proceedings.id, id));
+    return result;
   }
 
-  async createResearchDocument(doc: InsertResearchDocument): Promise<ResearchDocument> {
-    const [created] = await db.insert(researchDocuments).values(doc).returning();
-    return created;
+  async getProceedingByCaseNumber(
+    caseNumber: string
+  ): Promise<Proceeding | undefined> {
+    const [result] = await db
+      .select()
+      .from(proceedings)
+      .where(eq(proceedings.caseNumber, caseNumber));
+    return result;
   }
 
-  async getSubscriptions(userId: string): Promise<DocketSubscription[]> {
-    return db.select().from(docketSubscriptions)
-      .where(eq(docketSubscriptions.userId, userId))
-      .orderBy(desc(docketSubscriptions.createdAt));
+  async createProceeding(data: InsertProceeding): Promise<Proceeding> {
+    const [result] = await db.insert(proceedings).values(data).returning();
+    return result;
   }
 
-  async createSubscription(sub: InsertDocketSubscription): Promise<DocketSubscription> {
-    const [created] = await db.insert(docketSubscriptions).values(sub).returning();
-    return created;
-  }
-
-  async deleteSubscription(id: number, userId: string): Promise<boolean> {
-    const result = await db.delete(docketSubscriptions)
-      .where(and(eq(docketSubscriptions.id, id), eq(docketSubscriptions.userId, userId)))
+  async updateProceeding(
+    id: number,
+    data: Partial<InsertProceeding>
+  ): Promise<Proceeding | undefined> {
+    const [result] = await db
+      .update(proceedings)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(proceedings.id, id))
       .returning();
+    return result;
+  }
+
+  async deleteProceeding(id: number): Promise<boolean> {
+    const result = await db
+      .delete(proceedings)
+      .where(eq(proceedings.id, id))
+      .returning({ id: proceedings.id });
     return result.length > 0;
   }
 
-  async getSubscriptionsByDocket(docketId: number): Promise<DocketSubscription[]> {
-    return db.select().from(docketSubscriptions)
-      .where(eq(docketSubscriptions.docketId, docketId));
+  async getNearbyProceedings(
+    lat: number,
+    lng: number,
+    radiusMiles: number,
+    limit: number = 50
+  ): Promise<(Proceeding & { distance: number })[]> {
+    const result = await db.execute(sql`
+      SELECT *,
+        (
+          3959 * acos(
+            cos(radians(${lat})) * cos(radians(latitude)) *
+            cos(radians(longitude) - radians(${lng})) +
+            sin(radians(${lat})) * sin(radians(latitude))
+          )
+        ) AS distance
+      FROM proceedings
+      WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+        AND (
+          3959 * acos(
+            cos(radians(${lat})) * cos(radians(latitude)) *
+            cos(radians(longitude) - radians(${lng})) +
+            sin(radians(${lat})) * sin(radians(latitude))
+          )
+        ) < ${radiusMiles}
+      ORDER BY distance
+      LIMIT ${limit}
+    `);
+    return result.rows as (Proceeding & { distance: number })[];
   }
 
-  async getNotifications(userId: string, pagination?: PaginationParams): Promise<PaginatedResult<Notification>> {
-    const limit = pagination?.limit ?? DEFAULT_PAGE_LIMIT;
-    const offset = pagination?.offset ?? 0;
+  // =================== PROCEEDING EVENTS ===================
 
-    const [data, [{ total }]] = await Promise.all([
-      db.select().from(notifications)
-        .where(eq(notifications.userId, userId))
+  async getProceedingEvents(
+    proceedingId: number
+  ): Promise<ProceedingEvent[]> {
+    return db
+      .select()
+      .from(proceedingEvents)
+      .where(eq(proceedingEvents.proceedingId, proceedingId))
+      .orderBy(desc(proceedingEvents.eventDate));
+  }
+
+  async createProceedingEvent(
+    data: InsertProceedingEvent
+  ): Promise<ProceedingEvent> {
+    const [result] = await db
+      .insert(proceedingEvents)
+      .values(data)
+      .returning();
+    return result;
+  }
+
+  // =================== PROCEEDING DOCUMENTS ===================
+
+  async getProceedingDocuments(
+    proceedingId: number
+  ): Promise<ProceedingDocument[]> {
+    return db
+      .select()
+      .from(proceedingDocuments)
+      .where(eq(proceedingDocuments.proceedingId, proceedingId))
+      .orderBy(desc(proceedingDocuments.createdAt));
+  }
+
+  async getDocumentById(id: number): Promise<ProceedingDocument | undefined> {
+    const [result] = await db
+      .select()
+      .from(proceedingDocuments)
+      .where(eq(proceedingDocuments.id, id));
+    return result;
+  }
+
+  async createProceedingDocument(
+    data: InsertProceedingDocument
+  ): Promise<ProceedingDocument> {
+    const [result] = await db
+      .insert(proceedingDocuments)
+      .values(data)
+      .returning();
+    return result;
+  }
+
+  async updateDocument(
+    id: number,
+    data: Partial<InsertProceedingDocument>
+  ): Promise<ProceedingDocument | undefined> {
+    const [result] = await db
+      .update(proceedingDocuments)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(proceedingDocuments.id, id))
+      .returning();
+    return result;
+  }
+
+  async deleteDocument(id: number): Promise<boolean> {
+    const result = await db
+      .delete(proceedingDocuments)
+      .where(eq(proceedingDocuments.id, id))
+      .returning({ id: proceedingDocuments.id });
+    return result.length > 0;
+  }
+
+  // =================== CLIENTS ===================
+
+  async getClients(teamId: number): Promise<Client[]> {
+    return db
+      .select()
+      .from(clients)
+      .where(eq(clients.teamId, teamId))
+      .orderBy(asc(clients.name));
+  }
+
+  async getClientById(id: number): Promise<Client | undefined> {
+    const [result] = await db
+      .select()
+      .from(clients)
+      .where(eq(clients.id, id));
+    return result;
+  }
+
+  async createClient(data: InsertClient): Promise<Client> {
+    const [result] = await db.insert(clients).values(data).returning();
+    return result;
+  }
+
+  async updateClient(
+    id: number,
+    data: Partial<InsertClient>
+  ): Promise<Client | undefined> {
+    const [result] = await db
+      .update(clients)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(clients.id, id))
+      .returning();
+    return result;
+  }
+
+  async deleteClient(id: number): Promise<boolean> {
+    const result = await db
+      .delete(clients)
+      .where(eq(clients.id, id))
+      .returning({ id: clients.id });
+    return result.length > 0;
+  }
+
+  // =================== CLIENT PROCEEDINGS ===================
+
+  async getClientProceedings(
+    clientId: number
+  ): Promise<ClientProceeding[]> {
+    return db
+      .select()
+      .from(clientProceedings)
+      .where(eq(clientProceedings.clientId, clientId))
+      .orderBy(desc(clientProceedings.createdAt));
+  }
+
+  async createClientProceeding(
+    data: InsertClientProceeding
+  ): Promise<ClientProceeding> {
+    const [result] = await db
+      .insert(clientProceedings)
+      .values(data)
+      .returning();
+    return result;
+  }
+
+  async deleteClientProceeding(id: number): Promise<boolean> {
+    const result = await db
+      .delete(clientProceedings)
+      .where(eq(clientProceedings.id, id))
+      .returning({ id: clientProceedings.id });
+    return result.length > 0;
+  }
+
+  // =================== PROXIMITY ALERTS ===================
+
+  async getProximityAlerts(clientId: number): Promise<ProximityAlert[]> {
+    return db
+      .select()
+      .from(proximityAlerts)
+      .where(eq(proximityAlerts.clientId, clientId))
+      .orderBy(asc(proximityAlerts.distanceMiles));
+  }
+
+  async createProximityAlert(
+    data: { clientId: number; proceedingId: number; distanceMiles: number }
+  ): Promise<ProximityAlert> {
+    const [result] = await db
+      .insert(proximityAlerts)
+      .values(data)
+      .onConflictDoUpdate({
+        target: [proximityAlerts.clientId, proximityAlerts.proceedingId],
+        set: { distanceMiles: data.distanceMiles },
+      })
+      .returning();
+    return result;
+  }
+
+  async clearProximityAlerts(clientId: number): Promise<void> {
+    await db
+      .delete(proximityAlerts)
+      .where(eq(proximityAlerts.clientId, clientId));
+  }
+
+  // =================== SUBSCRIPTIONS ===================
+
+  async getSubscriptions(userId: string): Promise<Subscription[]> {
+    return db
+      .select()
+      .from(subscriptions)
+      .where(eq(subscriptions.userId, userId))
+      .orderBy(desc(subscriptions.createdAt));
+  }
+
+  async createSubscription(data: InsertSubscription): Promise<Subscription> {
+    const [result] = await db
+      .insert(subscriptions)
+      .values(data)
+      .returning();
+    return result;
+  }
+
+  async deleteSubscription(id: number): Promise<boolean> {
+    const result = await db
+      .delete(subscriptions)
+      .where(eq(subscriptions.id, id))
+      .returning({ id: subscriptions.id });
+    return result.length > 0;
+  }
+
+  // =================== NOTIFICATIONS ===================
+
+  async getNotifications(
+    userId: string,
+    options: NotificationsOptions = {}
+  ): Promise<{ data: Notification[]; total: number }> {
+    const { page = 1, limit = 20, unreadOnly } = options;
+    const offset = (page - 1) * limit;
+
+    const conditions = [eq(notifications.userId, userId)];
+    if (unreadOnly) {
+      conditions.push(eq(notifications.read, false));
+    }
+
+    const where = and(...conditions);
+
+    const [data, totalResult] = await Promise.all([
+      db
+        .select()
+        .from(notifications)
+        .where(where)
         .orderBy(desc(notifications.createdAt))
         .limit(limit)
         .offset(offset),
-      db.select({ total: count() }).from(notifications)
-        .where(eq(notifications.userId, userId)),
+      db.select({ count: count() }).from(notifications).where(where),
     ]);
 
-    return { data, total, limit, offset };
+    return { data, total: totalResult[0].count };
   }
 
-  async createNotification(notif: InsertNotification): Promise<Notification> {
-    const [created] = await db.insert(notifications).values(notif).returning();
-    return created;
-  }
-
-  async markNotificationRead(id: number, userId: string): Promise<boolean> {
-    const result = await db.update(notifications)
+  async markNotificationRead(id: number): Promise<Notification | undefined> {
+    const [result] = await db
+      .update(notifications)
       .set({ read: true })
-      .where(and(eq(notifications.id, id), eq(notifications.userId, userId)))
+      .where(eq(notifications.id, id))
       .returning();
-    return result.length > 0;
+    return result;
   }
 
   async markAllNotificationsRead(userId: string): Promise<void> {
-    await db.update(notifications).set({ read: true }).where(eq(notifications.userId, userId));
+    await db
+      .update(notifications)
+      .set({ read: true })
+      .where(
+        and(eq(notifications.userId, userId), eq(notifications.read, false))
+      );
   }
 
-  async getTemplates(): Promise<DraftTemplate[]> {
-    return db.select().from(draftTemplates).orderBy(draftTemplates.name);
+  async createNotification(data: InsertNotification): Promise<Notification> {
+    const [result] = await db
+      .insert(notifications)
+      .values(data)
+      .returning();
+    return result;
   }
 
-  async getTemplate(id: number): Promise<DraftTemplate | undefined> {
-    const [template] = await db.select().from(draftTemplates).where(eq(draftTemplates.id, id));
-    return template;
+  // =================== DEADLINES ===================
+
+  async getDeadlines(options: DeadlinesOptions = {}): Promise<Deadline[]> {
+    const { proceedingId, dateFrom, dateTo, completed } = options;
+
+    const conditions = [];
+
+    if (proceedingId !== undefined) {
+      conditions.push(eq(deadlines.proceedingId, proceedingId));
+    }
+    if (dateFrom) {
+      conditions.push(gte(deadlines.dueDate, dateFrom));
+    }
+    if (dateTo) {
+      conditions.push(lte(deadlines.dueDate, dateTo));
+    }
+    if (completed !== undefined) {
+      conditions.push(eq(deadlines.isCompleted, completed));
+    }
+
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+    return db
+      .select()
+      .from(deadlines)
+      .where(where)
+      .orderBy(asc(deadlines.dueDate));
   }
 
-  async createTemplate(template: InsertDraftTemplate): Promise<DraftTemplate> {
-    const [created] = await db.insert(draftTemplates).values(template).returning();
-    return created;
+  async getDeadlinesByProceeding(
+    proceedingId: number
+  ): Promise<Deadline[]> {
+    return db
+      .select()
+      .from(deadlines)
+      .where(eq(deadlines.proceedingId, proceedingId))
+      .orderBy(asc(deadlines.dueDate));
+  }
+
+  async createDeadline(data: InsertDeadline): Promise<Deadline> {
+    const [result] = await db.insert(deadlines).values(data).returning();
+    return result;
+  }
+
+  async updateDeadline(
+    id: number,
+    data: Partial<InsertDeadline>
+  ): Promise<Deadline | undefined> {
+    const [result] = await db
+      .update(deadlines)
+      .set(data)
+      .where(eq(deadlines.id, id))
+      .returning();
+    return result;
+  }
+
+  async deleteDeadline(id: number): Promise<boolean> {
+    const result = await db
+      .delete(deadlines)
+      .where(eq(deadlines.id, id))
+      .returning({ id: deadlines.id });
+    return result.length > 0;
+  }
+
+  // =================== RESEARCH DOCUMENTS ===================
+
+  async getResearchDocuments(
+    options: ResearchDocumentsOptions = {}
+  ): Promise<{ data: ResearchDocument[]; total: number }> {
+    const { page = 1, limit = 20, category, search } = options;
+    const offset = (page - 1) * limit;
+
+    const conditions = [];
+
+    if (category) {
+      conditions.push(eq(researchDocuments.category, category));
+    }
+    if (search) {
+      conditions.push(
+        or(
+          ilike(researchDocuments.title, `%${search}%`),
+          ilike(researchDocuments.description, `%${search}%`)
+        )!
+      );
+    }
+
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+    const [data, totalResult] = await Promise.all([
+      db
+        .select()
+        .from(researchDocuments)
+        .where(where)
+        .orderBy(desc(researchDocuments.createdAt))
+        .limit(limit)
+        .offset(offset),
+      db.select({ count: count() }).from(researchDocuments).where(where),
+    ]);
+
+    return { data, total: totalResult[0].count };
+  }
+
+  async getResearchDocumentById(
+    id: number
+  ): Promise<ResearchDocument | undefined> {
+    const [result] = await db
+      .select()
+      .from(researchDocuments)
+      .where(eq(researchDocuments.id, id));
+    return result;
+  }
+
+  async createResearchDocument(
+    data: InsertResearchDocument
+  ): Promise<ResearchDocument> {
+    const [result] = await db
+      .insert(researchDocuments)
+      .values(data)
+      .returning();
+    return result;
+  }
+
+  // =================== CASE BRIEFS ===================
+
+  async getCaseBriefs(): Promise<CaseBrief[]> {
+    return db
+      .select()
+      .from(caseBriefs)
+      .orderBy(desc(caseBriefs.updatedAt));
+  }
+
+  async getCaseBriefByProceeding(
+    proceedingId: number
+  ): Promise<CaseBrief | undefined> {
+    const [result] = await db
+      .select()
+      .from(caseBriefs)
+      .where(eq(caseBriefs.proceedingId, proceedingId));
+    return result;
+  }
+
+  async createCaseBrief(data: InsertCaseBrief): Promise<CaseBrief> {
+    const [result] = await db.insert(caseBriefs).values(data).returning();
+    return result;
+  }
+
+  async updateCaseBrief(
+    id: number,
+    data: Partial<InsertCaseBrief>
+  ): Promise<CaseBrief | undefined> {
+    const [result] = await db
+      .update(caseBriefs)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(caseBriefs.id, id))
+      .returning();
+    return result;
+  }
+
+  // =================== DRAFT TEMPLATES & SAVED DRAFTS ===================
+
+  async getDraftTemplates(): Promise<DraftTemplate[]> {
+    return db
+      .select()
+      .from(draftTemplates)
+      .orderBy(asc(draftTemplates.category), asc(draftTemplates.name));
   }
 
   async getSavedDrafts(userId: string): Promise<SavedDraft[]> {
-    return db.select().from(savedDrafts)
+    return db
+      .select()
+      .from(savedDrafts)
       .where(eq(savedDrafts.userId, userId))
-      .orderBy(desc(savedDrafts.createdAt));
+      .orderBy(desc(savedDrafts.updatedAt));
   }
 
-  async createSavedDraft(draft: InsertSavedDraft): Promise<SavedDraft> {
-    const [created] = await db.insert(savedDrafts).values(draft).returning();
-    return created;
+  async createSavedDraft(data: InsertSavedDraft): Promise<SavedDraft> {
+    const [result] = await db.insert(savedDrafts).values(data).returning();
+    return result;
   }
 
-  async getCaseBriefs(): Promise<CaseBrief[]> {
-    return db.select().from(caseBriefs).orderBy(desc(caseBriefs.updatedAt));
+  async updateSavedDraft(
+    id: number,
+    data: Partial<InsertSavedDraft>
+  ): Promise<SavedDraft | undefined> {
+    const [result] = await db
+      .update(savedDrafts)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(savedDrafts.id, id))
+      .returning();
+    return result;
   }
 
-  async getCaseBriefByDocket(docketId: number): Promise<CaseBrief | undefined> {
-    const [brief] = await db.select().from(caseBriefs).where(eq(caseBriefs.docketId, docketId));
-    return brief;
+  // =================== SYNC JOBS ===================
+
+  async getSyncJobs(limit: number = 20): Promise<SyncJob[]> {
+    return db
+      .select()
+      .from(syncJobs)
+      .orderBy(desc(syncJobs.createdAt))
+      .limit(limit);
   }
 
-  async createCaseBrief(brief: InsertCaseBrief): Promise<CaseBrief> {
-    const [created] = await db.insert(caseBriefs).values(brief)
+  async createSyncJob(data: InsertSyncJob): Promise<SyncJob> {
+    const [result] = await db.insert(syncJobs).values(data).returning();
+    return result;
+  }
+
+  async updateSyncJob(
+    id: number,
+    data: Partial<InsertSyncJob>
+  ): Promise<SyncJob | undefined> {
+    const [result] = await db
+      .update(syncJobs)
+      .set(data)
+      .where(eq(syncJobs.id, id))
+      .returning();
+    return result;
+  }
+
+  // =================== TEAMS ===================
+
+  async getTeamById(id: number): Promise<Team | undefined> {
+    const [result] = await db
+      .select()
+      .from(teams)
+      .where(eq(teams.id, id));
+    return result;
+  }
+
+  async createTeam(data: InsertTeam): Promise<Team> {
+    const [result] = await db.insert(teams).values(data).returning();
+    return result;
+  }
+
+  // =================== USERS ===================
+
+  async upsertUser(data: UpsertUser): Promise<User> {
+    const [result] = await db
+      .insert(users)
+      .values(data)
       .onConflictDoUpdate({
-        target: caseBriefs.docketId,
+        target: users.id,
         set: {
-          summary: brief.summary,
-          decisionIssues: brief.decisionIssues,
-          appellateIssues: brief.appellateIssues,
-          judicialReview: brief.judicialReview,
+          email: data.email,
+          firstName: data.firstName,
+          lastName: data.lastName,
+          profileImageUrl: data.profileImageUrl,
+          role: data.role,
+          teamId: data.teamId,
+          oauthProvider: data.oauthProvider,
+          oauthId: data.oauthId,
           updatedAt: new Date(),
         },
       })
       .returning();
-    return created;
+    return result;
   }
+  // =================== DASHBOARD ===================
 
-  async updateCaseBrief(docketId: number, data: Partial<InsertCaseBrief>): Promise<CaseBrief | undefined> {
-    const [updated] = await db.update(caseBriefs)
-      .set({ ...data, updatedAt: new Date() })
-      .where(eq(caseBriefs.docketId, docketId))
-      .returning();
-    return updated;
-  }
+  async getDashboardStats() {
+    const [totalResult] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(proceedings);
+    const [activeResult] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(proceedings)
+      .where(
+        and(
+          sql`${proceedings.status} NOT IN ('closed', 'withdrawn')`,
+          sql`${proceedings.outcome} IS NULL OR ${proceedings.outcome} NOT IN ('withdrawn')`
+        )
+      );
+    const [deadlineResult] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(deadlines)
+      .where(
+        and(eq(deadlines.isCompleted, false), gt(deadlines.dueDate, new Date()))
+      );
+    const [notifResult] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(notifications)
+      .where(eq(notifications.read, false));
 
-  async createDocketDocument(doc: InsertDocketDocument): Promise<DocketDocument> {
-    const [created] = await db.insert(docketDocuments).values(doc).returning();
-    return created;
-  }
-
-  async getDocketDocuments(docketId: number): Promise<DocketDocument[]> {
-    return db.select().from(docketDocuments)
-      .where(eq(docketDocuments.docketId, docketId))
-      .orderBy(desc(docketDocuments.createdAt));
-  }
-
-  async getDocketDocument(id: number): Promise<DocketDocument | undefined> {
-    const [doc] = await db.select().from(docketDocuments)
-      .where(eq(docketDocuments.id, id));
-    return doc;
-  }
-
-  async deleteDocketDocument(id: number): Promise<DocketDocument | undefined> {
-    const [deleted] = await db.delete(docketDocuments)
-      .where(eq(docketDocuments.id, id))
-      .returning();
-    return deleted;
-  }
-
-  async getSubscribersForDocket(docketId: number): Promise<User[]> {
-    const subs = await db.select({ userId: docketSubscriptions.userId })
-      .from(docketSubscriptions)
-      .where(eq(docketSubscriptions.docketId, docketId));
-    if (subs.length === 0) return [];
-    return db.select().from(users)
-      .where(inArray(users.id, subs.map((s) => s.userId)));
-  }
-
-  async getUsersByRole(role: string): Promise<User[]> {
-    return db.select().from(users)
-      .where(eq(users.role, role as typeof users.role.enumValues[number]));
+    return {
+      totalProceedings: Number(totalResult.count),
+      activeProceedings: Number(activeResult.count),
+      upcomingDeadlines: Number(deadlineResult.count),
+      unreadNotifications: Number(notifResult.count),
+    };
   }
 }
 

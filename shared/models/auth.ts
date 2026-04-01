@@ -1,8 +1,7 @@
 import { sql } from "drizzle-orm";
-import { index, jsonb, pgEnum, pgTable, timestamp, varchar } from "drizzle-orm/pg-core";
+import { index, jsonb, pgEnum, pgTable, timestamp, varchar, integer } from "drizzle-orm/pg-core";
 
-// Session storage table.
-// (IMPORTANT) This table is mandatory for Replit Auth, don't drop it.
+// Session storage table for express-session
 export const sessions = pgTable(
   "sessions",
   {
@@ -15,8 +14,6 @@ export const sessions = pgTable(
 
 export const userRoleEnum = pgEnum("user_role", ["admin", "attorney"]);
 
-// User storage table.
-// (IMPORTANT) This table is mandatory for Replit Auth, don't drop it.
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   email: varchar("email").unique(),
@@ -24,6 +21,9 @@ export const users = pgTable("users", {
   lastName: varchar("last_name"),
   profileImageUrl: varchar("profile_image_url"),
   role: userRoleEnum("role").notNull().default("attorney"),
+  teamId: integer("team_id"),
+  oauthProvider: varchar("oauth_provider"), // 'google' | 'microsoft'
+  oauthId: varchar("oauth_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
